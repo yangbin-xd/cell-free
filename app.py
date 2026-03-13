@@ -289,7 +289,7 @@ def _net_fig(ss):
         dragmode=False,
         height=710,
         title=dict(text="Cell-Free Network Topology",
-                   font=dict(color="white", size=13), x=0.5),
+                   font=dict(color="white", size=13), x=0.5, xanchor="center"),
     )
     return fig
 
@@ -317,7 +317,7 @@ def _bar_fig(true_v, pred_v, ylabel, title, ue_num, sel, fit_range=False):
     ])
     fig.update_layout(
         barmode="group",
-        title=dict(text=title, font=dict(color="white", size=11), x=0.5),
+        title=dict(text=title, font=dict(color="white", size=11), x=0.5, xanchor="center"),
         yaxis=dict(title=dict(text=ylabel, font=dict(size=10)),
                    color="white", gridcolor=GRID,
                    **(_fit_yrange(true_v, pred_v) if fit_range else {})),
@@ -347,7 +347,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-with st.expander("📖 How to use", expanded=True):
+with st.expander("## 📖 How to use", expanded=True):
     st.markdown("""
 **Select a UE**  &nbsp;→&nbsp; Click any green circle on the network graph. It turns gold when selected.
 

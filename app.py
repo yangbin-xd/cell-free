@@ -109,7 +109,7 @@ def _recompute_true(ue_csi, ap_orig, A, P, snr_val):
     ic         = np.einsum('lm,lkmn->kmn', PA, cross)  # (K, K, Nc)
     k_idx      = np.arange(K)
     ic[k_idx, k_idx, :] = 0                            # zero self-term
-    int_pow    = np.abs(ic) ** 2 .sum(axis=1)          # (K, Nc)
+    int_pow    = (np.abs(ic) ** 2).sum(axis=1)          # (K, Nc)
 
     # ── Rates ─────────────────────────────────────────────────────
     noise  = 10 ** ((-87 - snr_val) / 10)
@@ -280,14 +280,23 @@ def _net_fig(ss):
         margin=dict(l=55, r=15, t=45, b=50),
         clickmode="event+select",
         dragmode=False,
-        height=540,
+        height=710,
         title=dict(text="Cell-Free Network Topology",
                    font=dict(color="white", size=13), x=0.5),
     )
     return fig
 
 
-def _bar_fig(true_v, pred_v, ylabel, title, ue_num, sel):
+def _fit_yrange(true_v, pred_v):
+    finite = [v for v in list(true_v) + list(pred_v) if np.isfinite(v)]
+    if not finite:
+        return {}
+    lo, hi = min(finite), max(finite)
+    margin = max((hi - lo) * 0.15, 0.5)
+    return {"range": [lo - margin, hi + margin]}
+
+
+def _bar_fig(true_v, pred_v, ylabel, title, ue_num, sel, fit_range=False):
     def _clean(arr):
         return [float(v) if np.isfinite(v) else None for v in arr]
 
@@ -302,16 +311,17 @@ def _bar_fig(true_v, pred_v, ylabel, title, ue_num, sel):
     fig.update_layout(
         barmode="group",
         title=dict(text=title, font=dict(color="white", size=11), x=0.5),
-        yaxis=dict(title=ylabel, color="white", gridcolor=GRID,
-                   titlefont=dict(size=10)),
+        yaxis=dict(title=dict(text=ylabel, font=dict(size=10)),
+                   color="white", gridcolor=GRID,
+                   **(_fit_yrange(true_v, pred_v) if fit_range else {})),
         xaxis=dict(title="UE", color="white", gridcolor=GRID,
                    tickmode="linear", tick0=0, dtick=max(1, ue_num // 12)),
         paper_bgcolor=BG, plot_bgcolor=AX,
         font=dict(color="white", size=9),
-        legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h",
-                    x=0.5, xanchor="center", y=1.12, font=dict(size=9)),
+        legend=dict(bgcolor="rgba(17,17,34,0.6)", font=dict(size=9, color="white"),
+                    bordercolor=GRID, borderwidth=1),
         margin=dict(l=55, r=10, t=42, b=35),
-        height=235,
+        height=226,
     )
     return fig
 
@@ -367,12 +377,14 @@ with col_l:
 with col_r:
     st.plotly_chart(
         _bar_fig(ss.true_signal, ss.pred_signal,
-                 "dBW", "Signal Power", ss.ue_num, ss.selected_ue),
+                 "dBW", "Signal Power", ss.ue_num, ss.selected_ue,
+                 fit_range=True),
         use_container_width=True, key="b_sig",
     )
     st.plotly_chart(
         _bar_fig(ss.true_interf, ss.pred_interf,
-                 "dBW", "Interference Power", ss.ue_num, ss.selected_ue),
+                 "dBW", "Interference Power", ss.ue_num, ss.selected_ue,
+                 fit_range=True),
         use_container_width=True, key="b_int",
     )
     st.plotly_chart(

@@ -9,6 +9,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+st.markdown("""
+<style>
+    .block-container { padding-top: 1rem; }
+</style>
+""", unsafe_allow_html=True)
+
 # ─── Project imports ──────────────────────────────────────────────────────────
 # data/CSI.npy is included in the GitHub repo (88 MB, under GitHub's 100 MB limit)
 import numpy as np

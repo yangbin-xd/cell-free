@@ -349,7 +349,7 @@ st.markdown(
 
 with st.expander("## 📖 How to use", expanded=True):
     st.markdown("""
-**选择 / 取消选择 UE** &nbsp;→&nbsp; 点击网络图上的任意绿色圆圈，圆圈变为金色表示已选中。再次点击所选 UE 或点击空白区域可取消选择。
+**Select a UE** &nbsp;→&nbsp; Click any green circle on the network graph. The circle turns gold when selected. Click the selected UE again or click an empty area to deselect.
 
 **Toggle AP connection** &nbsp;→&nbsp; First select a UE, then click an AP (triangle). If the AP is already connected it will be disconnected (and vice versa). Note: the last serving AP cannot be removed.
 

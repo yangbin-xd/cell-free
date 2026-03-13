@@ -99,8 +99,8 @@ if __name__ == '__main__':
 
 
     # grid-based radio map
-    grid1 = 10.0
-    grid2 = 20.0
+    grid1 = 5.0
+    grid2 = 10.0
 
     x_min, x_max = 600, 635
     y_min, y_max = 240, 280

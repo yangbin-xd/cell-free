@@ -15,7 +15,7 @@ loc_mean = loc_conc[:,:2].mean(axis=0)
 loc_std = loc_conc[:,:2].std(axis=0)
 
 # training and test samples
-num_train = 8000
+num_train = 10000
 num_test = 2000
 
 # training and test class

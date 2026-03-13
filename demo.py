@@ -32,7 +32,7 @@ def digital_twin(snr=15, test_idx=0, do_plot=True, do_print=True):
 
     if do_plot:
         plot_result(BS_loc, UE_loc, A, P)
-        plt.savefig('result/twin.pdf')
+        # plt.savefig('result/twin.pdf')
 
     # digital twin
     SignalMap = SignalModel()

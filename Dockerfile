@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir \
     numpy==1.26.4 \
     scipy==1.10.1 \
     scikit-learn==1.3.2 \
+    matplotlib==3.7.5 \
     plotly==6.6.0 \
     streamlit==1.40.1
 

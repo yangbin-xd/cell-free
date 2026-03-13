@@ -347,7 +347,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-with st.expander("## 📖 How to use", expanded=True):
+with st.expander("📖 How to use", expanded=True):
+    st.markdown("<h2 style='margin-top:0'>📖 How to use</h2>", unsafe_allow_html=True)
     st.markdown("""
 **Select a UE** &nbsp;→&nbsp; Click any green circle on the network graph. The circle turns gold when selected. Click the selected UE again or click an empty area to deselect.
 

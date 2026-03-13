@@ -347,9 +347,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-with st.expander("📖 How to use", expanded=True):
-    st.markdown("<h2 style='margin-top:0'>📖 How to use</h2>", unsafe_allow_html=True)
-    st.markdown("""
+st.markdown("<h2 style='margin-top:0'>📖 How to use</h2>", unsafe_allow_html=True)
+st.markdown("""
 **Select a UE** &nbsp;→&nbsp; Click any green circle on the network graph. The circle turns gold when selected. Click the selected UE again or click an empty area to deselect.
 
 **Toggle AP connection** &nbsp;→&nbsp; First select a UE, then click an AP (triangle). If the AP is already connected it will be disconnected (and vice versa). Note: the last serving AP cannot be removed.
@@ -361,7 +360,8 @@ with st.expander("📖 How to use", expanded=True):
 **Reset** &nbsp;→&nbsp; Restores the current sample to its original topology and power.
 
 **SNR** &nbsp;→&nbsp; Use the SNR slider (bottom right) to change the noise level (0 – 30 dB). The rate chart updates instantly.
-""")
+"""
+)
 
 # ─── Main layout ──────────────────────────────────────────────────────────────
 col_l, col_r = st.columns([1.6, 1.0])

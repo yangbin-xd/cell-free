@@ -11,6 +11,7 @@ The scenario of user-centric cell-free massive MIMO system.
 This is the source code for paper  
 __"Radio Map-Enabled Digital Twin for User-Centric Cell-Free Massive MIMO"__   
 
+Interative demo of this work: https://huggingface.co/spaces/Bin-Yang/cell-free  
 Video introducing radio map: https://www.youtube.com/watch?v=KqihgPd0c2o
 
 ## 🛠️ Please follow the following steps:

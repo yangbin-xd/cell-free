@@ -1,4 +1,14 @@
-# 🚨 cell-free  
+---
+title: Cell-Free Digital Twin
+emoji: 📡
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_file: app.py
+pinned: false
+---
+
+# 🚨 cell-free
 
 [![Code](https://img.shields.io/badge/Code-GitHub-blue?logo=github)](https://github.com/yangbin-xd/cell-free)
 [![License](https://img.shields.io/badge/License-MIT-green)](https://opensource.org/licenses/MIT)

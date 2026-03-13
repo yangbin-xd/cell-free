@@ -347,6 +347,23 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+with st.expander("📖 How to use", expanded=True):
+    st.markdown("""
+**Select a UE**  &nbsp;→&nbsp; Click any green circle on the network graph. It turns gold when selected.
+
+**Deselect** &nbsp;→&nbsp; Click the selected UE again, or click an empty area.
+
+**Toggle AP connection** &nbsp;→&nbsp; First select a UE, then click an AP (triangle). If the AP is already connected it will be disconnected (and vice versa). Note: the last serving AP cannot be removed.
+
+**Adjust power** &nbsp;→&nbsp; Select a UE — power weight sliders for each serving AP appear at the bottom of the page. Drag a slider to redistribute power; values are auto-normalised per AP.
+
+**Browse samples** &nbsp;→&nbsp; Use **< Prev** / **Next >** to switch between test scenarios.
+
+**Reset** &nbsp;→&nbsp; Restores the current sample to its original topology and power.
+
+**SNR** &nbsp;→&nbsp; Use the SNR slider (bottom right) to change the noise level (0 – 30 dB). The rate chart updates instantly.
+""")
+
 # ─── Main layout ──────────────────────────────────────────────────────────────
 col_l, col_r = st.columns([1.6, 1.0])
 

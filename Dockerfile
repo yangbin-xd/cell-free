@@ -18,8 +18,8 @@ RUN pip install --no-cache-dir torch-geometric==2.6.1
 # Remaining dependencies
 RUN pip install --no-cache-dir \
     numpy==1.26.4 \
-    scipy \
-    scikit-learn \
+    scipy==1.10.1 \
+    scikit-learn==1.3.2 \
     plotly==6.6.0 \
     streamlit==1.40.1
 

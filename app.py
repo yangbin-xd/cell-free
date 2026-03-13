@@ -13,6 +13,13 @@ st.set_page_config(
 # data/CSI.npy is included in the GitHub repo (88 MB, under GitHub's 100 MB limit)
 import numpy as np
 import torch
+
+# Ensure all torch.load calls default to CPU (for HF Spaces / CPU-only environments)
+_torch_load_orig = torch.load
+def _torch_load_cpu(f, *args, **kwargs):
+    kwargs.setdefault('map_location', 'cpu')
+    return _torch_load_orig(f, *args, **kwargs)
+torch.load = _torch_load_cpu
 import plotly.graph_objects as go
 
 from main      import BS_loc

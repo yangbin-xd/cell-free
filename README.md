@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/License-MIT-green)](https://opensource.org/licenses/MIT)
 [![Demo](https://img.shields.io/badge/Demo-HuggingFace-yellow?logo=huggingface)](https://huggingface.co/spaces/Bin-Yang/cell-free)
 
-<img src='scenario.png' width='500'>
+<img src='scenario.png' width='800'>
 The scenario of user-centric cell-free massive MIMO system.    
 
 ## 📝 Information:

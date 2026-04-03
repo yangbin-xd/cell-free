@@ -5,7 +5,7 @@
 [![Demo](https://img.shields.io/badge/Demo-HuggingFace-yellow?logo=huggingface)](https://huggingface.co/spaces/Bin-Yang/cell-free)
 
 <img src='scenario.png' width='800'>
-The scenario of user-centric cell-free massive MIMO system.    
+The proposed DT deployed in the CC for achievable rates prediction in UC-CF massive MIMO networks, with a) AP selection, b) power allocation, and c) UE locations as inputs.    
 
 ## 📝 Information:
 This is the source code for paper  

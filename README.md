@@ -5,7 +5,7 @@
 [![Demo](https://img.shields.io/badge/Demo-HuggingFace-yellow?logo=huggingface)](https://huggingface.co/spaces/Bin-Yang/cell-free)
 
 <img src='scenario.png' width='800'>
-The proposed DT deployed in the CC for achievable rates prediction in UC-CF massive MIMO networks, with a) AP selection, b) power allocation, and c) UE locations as inputs.    
+Visualization of the proposed radio map-enabled digital twin for a user-centric cell-free network. The left panel shows the cell-free network topology, where triangular markers denote APs, circular markers denote UEs, and blue edges represent AP–UE associations with the corresponding power allocation coefficients. The right panels compare the true and predicted signal power, interference power, and achievable rate for all UEs. The achievable rate is evaluated at an SNR of 15 dB. The close agreement between the true and predicted values demonstrates that the learned digital twin can accurately characterize the physical network response from the network topology and resource allocation variables.     
 
 ## 📝 Information:
 This is the source code for paper  

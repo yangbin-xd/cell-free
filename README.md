@@ -3,6 +3,7 @@
 [![Code](https://img.shields.io/badge/Code-GitHub-blue?logo=github)](https://github.com/yangbin-xd/cell-free)
 [![License](https://img.shields.io/badge/License-MIT-green)](https://opensource.org/licenses/MIT)
 [![Demo](https://img.shields.io/badge/Demo-HuggingFace-yellow?logo=huggingface)](https://huggingface.co/spaces/Bin-Yang/cell-free)
+[![Code Ocean](https://img.shields.io/badge/Reproducibility-Code%20Ocean-2ea44f)](https://codeocean.com/capsule/6209139/tree)  
 
 <img src='scenario.png' width='800'>  
 

@@ -43,19 +43,7 @@ __3. Install the required modules__
 pip install -r requirements.txt
 ```
 
-__4. Download data and pretrained model__
-```python
-# install lfs if don't have
-sudo apt-get install git-lfs
-
-# configure lfs
-git lfs install
-
-# pull data by lfs  
-git lfs pull
-```
-
-__5. Then, you can run files__
+__4. Then, you can run files__
 ```python
 # a user-centric cell-free network demo  
 python main.py

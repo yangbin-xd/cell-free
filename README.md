@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <img src="scenario.png" width="600">
+  <img src="scenario.png" width="1000">
 </p>
 
 Project Website: https://www.radiomap.online  

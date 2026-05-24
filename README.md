@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="title.svg" width="900">
+  <img src="title.svg" width="600">
 </p>
 
 [![Code](https://img.shields.io/badge/Code-GitHub-blue?logo=github)](https://github.com/yangbin-xd/cell-free)

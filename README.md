@@ -3,21 +3,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/yangbin-xd/cell-free">
-    <img src="https://img.shields.io/badge/Code-GitHub-blue?logo=github">
-  </a>
-  <a href="https://opensource.org/licenses/MIT">
-    <img src="https://img.shields.io/badge/License-MIT-green">
-  </a>
-  <a href="https://huggingface.co/spaces/Bin-Yang/cell-free">
-    <img src="https://img.shields.io/badge/Demo-HuggingFace-yellow?logo=huggingface">
-  </a>
-  <a href="https://codeocean.com/capsule/6209139/tree">
-    <img src="https://img.shields.io/badge/Reproducibility-Code%20Ocean-2ea44f">
-  </a>
-  <a href="https://www.radiomap.online">
-    <img src="https://img.shields.io/badge/Project-radiomap.online-purple?logo=googlechrome">
-  </a>
+  <a href="https://github.com/yangbin-xd/cell-free"><img src="https://img.shields.io/badge/Code-GitHub-blue?logo=github" alt="Code"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-green" alt="License"></a>
+  <a href="https://huggingface.co/spaces/Bin-Yang/cell-free"><img src="https://img.shields.io/badge/🤗%20Demo-HuggingFace-yellow" alt="Demo"></a>
+  <a href="https://codeocean.com/capsule/6209139/tree"><img src="https://img.shields.io/badge/Reproducibility-Code%20Ocean-2ea44f" alt="Code Ocean"></a>
+  <a href="https://www.radiomap.online"><img src="https://img.shields.io/badge/🌐%20Project-radiomap.online-purple" alt="Project"></a>
 </p>
 
 <p align="center">

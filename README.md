@@ -2,11 +2,23 @@
   <img src="title.svg" width="600">
 </p>
 
-[![Code](https://img.shields.io/badge/Code-GitHub-blue?logo=github)](https://github.com/yangbin-xd/cell-free)
-[![License](https://img.shields.io/badge/License-MIT-green)](https://opensource.org/licenses/MIT)
-[![Demo](https://img.shields.io/badge/Demo-HuggingFace-yellow?logo=huggingface)](https://huggingface.co/spaces/Bin-Yang/cell-free)
-[![Code Ocean](https://img.shields.io/badge/Reproducibility-Code%20Ocean-2ea44f)](https://codeocean.com/capsule/6209139/tree)  
-[![Project](https://img.shields.io/badge/Project-radiomap.online-purple?logo=googlechrome)](https://www.radiomap.online)
+<p align="center">
+  <a href="https://github.com/yangbin-xd/cell-free">
+    <img src="https://img.shields.io/badge/Code-GitHub-blue?logo=github">
+  </a>
+  <a href="https://opensource.org/licenses/MIT">
+    <img src="https://img.shields.io/badge/License-MIT-green">
+  </a>
+  <a href="https://huggingface.co/spaces/Bin-Yang/cell-free">
+    <img src="https://img.shields.io/badge/Demo-HuggingFace-yellow?logo=huggingface">
+  </a>
+  <a href="https://codeocean.com/capsule/6209139/tree">
+    <img src="https://img.shields.io/badge/Reproducibility-Code%20Ocean-2ea44f">
+  </a>
+  <a href="https://www.radiomap.online">
+    <img src="https://img.shields.io/badge/Project-radiomap.online-purple?logo=googlechrome">
+  </a>
+</p>
 
 <p align="center">
   <img src="scenario.png" width="600">

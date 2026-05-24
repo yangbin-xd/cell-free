@@ -19,7 +19,7 @@ Visualization of the proposed radio map-enabled digital twin for a user-centric 
 
 ## 📝 Information:
 This is the source code for paper  
-__"Radio Map-Enabled Digital Twin for User-Centric Cell-Free Massive MIMO"__   
+__"Learning Radio Maps via Graph Transformer for User-Centric Cell-Free Massive MIMO"__   
 
 Interative demo of this work: https://huggingface.co/spaces/Bin-Yang/cell-free  
 Video introducing radio map: https://www.youtube.com/watch?v=KqihgPd0c2o

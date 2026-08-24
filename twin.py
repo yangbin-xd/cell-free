@@ -2,12 +2,18 @@
 # digital twin
 import numpy as np
 from demo import digital_twin
-from query import baseline
+from baseline.query import baseline
 
 import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.rcParams['mathtext.fontset'] = 'cm'
-matplotlib.rcParams['font.family'] = 'times new roman'
+# 'Times New Roman' is absent on Katana; Nimbus Roman is URW's
+# metric-compatible clone of it. Without this chain matplotlib falls back
+# to DejaVu Sans and the figures come out in the wrong typeface entirely.
+matplotlib.rcParams['font.family'] = 'serif'
+matplotlib.rcParams['font.serif'] = ['Times New Roman', 'Nimbus Roman',
+                                     'DejaVu Serif']
+from matplotlib.ticker import MultipleLocator
 font1, font2 = 20, 17
 
 test_idx = 0
@@ -44,10 +50,22 @@ beam_interf = beam_interf[beam_interf != 0]
 beam_rate = beam_rate[test_idx]
 beam_rate = beam_rate[beam_rate != 0]
 
+# closed-form (Ngo et al. 2017, Eq. (24), large-scale gains only)
+ngo_signal = np.load('result/closed/closed_pl_signal.npy')
+ngo_interf = np.load('result/closed/closed_pl_interf.npy')
+ngo_rate = np.load(f'result/closed/closed_pl_rate_{snr}dB.npy')
+
+ngo_signal = ngo_signal[test_idx]
+ngo_signal = ngo_signal[ngo_signal != 0]
+ngo_interf = ngo_interf[test_idx]
+ngo_interf = ngo_interf[ngo_interf != 0]
+ngo_rate = ngo_rate[test_idx]
+ngo_rate = ngo_rate[ngo_rate != 0]
+
 # sort_idx_rate = np.argsort(true_rate)
 # plot result
-def plot_error(true_value, pred_value, query_value, map_value, beam_value, name, unit,
-               min, max):
+def plot_error(true_value, pred_value, query_value, map_value, beam_value, ngo_value,
+               name, unit, min, max):
 
     # true_sorted  = true_value[sort_idx]
     # pred_sorted  = pred_value[sort_idx]
@@ -55,29 +73,37 @@ def plot_error(true_value, pred_value, query_value, map_value, beam_value, name,
     # map_sorted   = map_value[sort_idx]
     # beam_sorted  = beam_value[sort_idx]
 
+    pred_value = np.abs(true_value - pred_value)
+    query_value = np.abs(true_value - query_value)
+    map_value = np.abs(true_value - map_value)
+    beam_value = np.abs(true_value - beam_value)
+    ngo_value = np.abs(true_value - ngo_value)
+
     x = np.arange(true_value.shape[0])
     fig, ax = plt.subplots(figsize=(6.5, 5))
-    
-    plt.plot(x, map_value, c='#F65314', linewidth=2.0, label="Baseline 1 [17]")
-    plt.plot(x, query_value, c='#FFBB00', linewidth=2.0, label="Baseline 2 [24]")
-    plt.plot(x, beam_value, c='#7CBB00', linewidth=2.0, label="Baseline 3 [25]")
-    plt.plot(x, pred_value, c='#00A1F1', linewidth=2.0, label="Proposed")
-    plt.plot(x, true_value, c='#68217A', linewidth=2.0, label="True")
+
+    plt.plot(x, ngo_value, c='#F65314', linewidth=2.0, label="Baseline 1 [2]") # closed-form
+    plt.plot(x, map_value, c='#FFBB00', linewidth=2.0, label="Baseline 2 [19]") # [15]
+    plt.plot(x, query_value, c='#7CBB00', linewidth=2.0, label="Baseline 3 [26]") # [22]
+    plt.plot(x, beam_value, c='#00A1F1', linewidth=2.0, label="Baseline 4 [27]") # [23]
+    plt.plot(x, pred_value, c='#68217A', linewidth=2.0, label="Proposed")
+    # plt.plot(x, true_value, c='#68217A', linewidth=2.0, label="True")
 
     plt.xlabel("UE ID", fontsize=font1)
     plt.ylabel(f"{name} ({unit})", fontsize=font1)
-    plt.legend(fontsize=font2, ncol=3, columnspacing=1, handletextpad=0.3, handlelength=1, labelspacing=0.3, loc='upper right')
+    plt.legend(fontsize=font2, ncol=2, columnspacing=1, handletextpad=0.3, handlelength=1, labelspacing=0.3, loc='upper right')
     plt.xticks(fontsize=font1)
     plt.yticks(fontsize=font1)
     plt.ylim([min, max])
     plt.grid(True, which='both', ls=':', color='gray', alpha=0.3)
     ax.set_xticks(np.arange(0, int(ue_num), 4))
+    # ax.yaxis.set_major_locator(MultipleLocator(0.5))
     plt.tight_layout()
 
-plot_error(true_signal, pred_signal, query_signal, map_signal, beam_signal, "Signal power", "dBW", -100, -75)
+plot_error(true_signal, pred_signal, query_signal, map_signal, beam_signal, ngo_signal, "Signal power prediction error", "dB", 0, 10) # -100, -75
 plt.savefig('result/signal_twin.pdf')
-plot_error(true_interf, pred_interf, query_interf, map_interf, beam_interf, "Interference power", "dBW", -94, -78)
+plot_error(true_interf, pred_interf, query_interf, map_interf, beam_interf, ngo_interf, "Interf. power prediction error", "dB", 0, 10) # -94, -78
 plt.savefig('result/interf_twin.pdf')
-plot_error(true_rate, pred_rate, query_rate, map_rate, beam_rate, "SE", "bits/s/Hz", 0, 4.0)
+plot_error(true_rate, pred_rate, query_rate, map_rate, beam_rate, ngo_rate, "SE prediction error", "bits/s/Hz", 0, 2.5) # 0, 4.0
 plt.savefig('result/rate_twin.pdf')
 plt.show()

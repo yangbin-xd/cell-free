@@ -3,7 +3,12 @@ from process import *
 import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.rcParams['mathtext.fontset'] = 'cm'
-matplotlib.rcParams['font.family'] = 'times new roman'
+# 'Times New Roman' is absent on Katana; Nimbus Roman is URW's
+# metric-compatible clone of it. Without this chain matplotlib falls back
+# to DejaVu Sans and the figures come out in the wrong typeface entirely.
+matplotlib.rcParams['font.family'] = 'serif'
+matplotlib.rcParams['font.serif'] = ['Times New Roman', 'Nimbus Roman',
+                                     'DejaVu Serif']
 font1, font2 = 24, 18
 
 # read data

@@ -1,4 +1,6 @@
 # generate train and test realization of cell-free networks
+import argparse
+import os
 from main import *
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
@@ -15,7 +17,7 @@ loc_mean = loc_conc[:,:2].mean(axis=0)
 loc_std = loc_conc[:,:2].std(axis=0)
 
 # training and test samples
-num_train = 8000
+num_train = 10000
 num_test = 2000
 
 # training and test class
@@ -23,10 +25,23 @@ cf_train = CellFree(BS_loc, UE_train, CSI_train)
 cf_test = CellFree(BS_loc, UE_test, CSI_test)
 
 def generate_data(cf, num_samples, max_ap_num=12, min_ue_num=10,
-                  max_ue_num=30, base_seed=0):
+                  max_ue_num=30, base_seed=0,
+                  pilot_snr=np.inf, mc=1, err_stream=0):
+    """Realizations of the network plus their signal / interference / rate labels.
 
+    pilot_snr / mc are forwarded to CellFree.calculate_sinr; the defaults
+    (inf, 1) are the perfect-CSI setting that produced the committed datasets.
+
+    The estimation-error draws come from a SeedSequence keyed on err_stream and
+    kept SEPARATE from ss_child, which seeds the network structure. That
+    separation is what makes loc/A/P/AP_num/UE_num bit-identical across pilot
+    SNRs -- only the labels move, which is the whole claim being tested. Train
+    and test must pass different err_stream values so the test realization is
+    independent of anything the model saw.
+    """
     ss_root = np.random.SeedSequence(base_seed)
     ss_child = ss_root.spawn(num_samples)
+    ss_err = np.random.SeedSequence([base_seed, err_stream]).spawn(num_samples)
 
     A_full = np.zeros([num_samples, max_ap_num, max_ue_num], dtype=np.int8)
     P_full = np.zeros([num_samples, max_ap_num, max_ue_num], dtype=np.float32)
@@ -61,7 +76,9 @@ def generate_data(cf, num_samples, max_ap_num=12, min_ue_num=10,
         P = cf.random_power(A, seed)
 
         # calculate rate
-        signal, interf, rate = cf.calculate_sinr(A, P)
+        signal, interf, rate = cf.calculate_sinr(
+            A, P, pilot_snr=pilot_snr, mc=mc,
+            rng=np.random.default_rng(ss_err[i]))
 
         UE_num[i] = ue_num
         AP_num[i] = ap_num
@@ -81,40 +98,71 @@ def generate_data(cf, num_samples, max_ap_num=12, min_ue_num=10,
            interf_set, rate_set
 
 
+FIELDS = ('A_full', 'P_full', 'AP_num', 'UE_num', 'loc', 'A', 'P',
+          'signal', 'interf', 'rate')
+# Everything except the last three is network structure, which must not depend
+# on the pilot SNR -- see check_inputs_unchanged.
+INPUT_FIELDS = FIELDS[:-3]
+
+
+def check_inputs_unchanged(arrays, split, ref_root='data'):
+    """Assert the structural arrays match the committed perfect-CSI dataset.
+
+    Only signal/interf/rate may differ between operating points. If an input
+    array moved, the pilot-SNR comparison is no longer single-factor and every
+    conclusion drawn from it is void -- so fail loudly rather than train on it.
+    """
+    for name in INPUT_FIELDS:
+        path = f'{ref_root}/{split}/{name}_{split}.npy'
+        if not os.path.exists(path):
+            print(f'  [skip] no reference at {path}')
+            continue
+        ref = np.load(path)
+        got = arrays[name]
+        if not np.array_equal(ref, got):
+            raise SystemExit(
+                f'FATAL: {name}_{split} differs from {path}. Network structure '
+                f'must be identical across pilot SNRs; only the labels may move.')
+    print(f'  [ok] {split}: all {len(INPUT_FIELDS)} structural arrays match {ref_root}/')
+
+
 if __name__ == "__main__":
-    
-    # generate train data
-    A_full_train, P_full_train, AP_num_train, UE_num_train, loc_train, A_train, P_train,\
-        signal_train, interf_train, rate_train = generate_data(cf_train, num_train)
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--pilot-snr', type=float, default=float('inf'),
+                    help='uplink pilot SNR rho_bar_p = tau_p*rho_p/sigma^2. '
+                         'inf (default) = perfect CSI, reproduces the committed '
+                         'datasets exactly. Nominal operating point is 3.17e11 '
+                         '(tau_p=K orthogonal pilots, rho_p=1, 15 dB design '
+                         'point), which gives median serving-link tau^2 = 0.052.')
+    ap.add_argument('--mc', type=int, default=1,
+                    help='estimation-error draws to average per subcarrier. 1 is '
+                         'correct for the deployment-realistic label (a real '
+                         'system measures one realization); raise only if the '
+                         'measured label spread turns out to matter.')
+    ap.add_argument('--out-root', default='data',
+                    help='dataset root to write, e.g. data_pilot_tau0.052')
+    args = ap.parse_args()
 
-    # generate test data
-    A_full_test, P_full_test, AP_num_test, UE_num_test, loc_test, A_test, P_test,\
-        signal_test, interf_test, rate_test = generate_data(cf_test, num_test)
-    
-    # A_full_train = generate_data(cf_train, num_train)
-    # A_full_test = generate_data(cf_test, num_test)
+    if num_train != 10000:
+        raise SystemExit(f'num_train={num_train}, expected 10000. A truncated '
+                         f'dataset silently invalidates every retrained model.')
 
-    # save train data
-    np.save('data/train/A_full_train.npy', A_full_train)
-    np.save('data/train/P_full_train.npy', P_full_train)
-    np.save('data/train/AP_num_train.npy', AP_num_train)
-    np.save('data/train/UE_num_train.npy', UE_num_train)
-    np.save('data/train/loc_train.npy', loc_train)
-    np.save('data/train/A_train.npy', A_train)
-    np.save('data/train/P_train.npy', P_train)
-    np.save('data/train/signal_train.npy', signal_train)
-    np.save('data/train/interf_train.npy', interf_train)
-    np.save('data/train/rate_train.npy', rate_train)
+    print(f'pilot_snr={args.pilot_snr:.4g}  mc={args.mc}  -> {args.out_root}/')
 
-    # save test data
-    np.save('data/test/A_full_test.npy', A_full_test)
-    np.save('data/test/P_full_test.npy', P_full_test)
-    np.save('data/test/AP_num_test.npy', AP_num_test)
-    np.save('data/test/UE_num_test.npy', UE_num_test)
-    np.save('data/test/loc_test.npy', loc_test)
-    np.save('data/test/A_test.npy', A_test)
-    np.save('data/test/P_test.npy', P_test)
-    np.save('data/test/signal_test.npy', signal_test)
-    np.save('data/test/interf_test.npy', interf_test)
-    np.save('data/test/rate_test.npy', rate_test)
+    # err_stream differs between splits so the test labels' estimation-error
+    # realization is independent of the training one.
+    train = dict(zip(FIELDS, generate_data(
+        cf_train, num_train, pilot_snr=args.pilot_snr, mc=args.mc, err_stream=1001)))
+    test = dict(zip(FIELDS, generate_data(
+        cf_test, num_test, pilot_snr=args.pilot_snr, mc=args.mc, err_stream=1002)))
+
+    check_inputs_unchanged(train, 'train')
+    check_inputs_unchanged(test, 'test')
+
+    for split, arrays in (('train', train), ('test', test)):
+        outdir = f'{args.out_root}/{split}'
+        os.makedirs(outdir, exist_ok=True)
+        for name in FIELDS:
+            np.save(f'{outdir}/{name}_{split}.npy', arrays[name])
+        print(f'  wrote {len(FIELDS)} arrays to {outdir}/')
     

@@ -1,27 +1,39 @@
 # data preprocess
+import os
 import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from generate import loc_mean, loc_std
 
-# read data
-AP_num_train = np.load('data/train/AP_num_train.npy') # (8000, )
-UE_num_train = np.load('data/train/UE_num_train.npy') # (8000, )
-loc_train = np.load('data/train/loc_train.npy') # (8000, max_ap_num+max_ue_num, 2)
-A_train = np.load('data/train/A_train.npy') # (8000, 3, max_ue_num)
-P_train = np.load('data/train/P_train.npy') # (8000, 3, max_ue_num)
-signal_train = np.load('data/train/signal_train.npy') # (8000, max_ue_num)
-interf_train = np.load('data/train/interf_train.npy') # (8000, max_ue_num)
-rate_train = np.load('data/train/rate_train.npy') # (7, 8000, max_ue_num)
+# Single choke point for the dataset root, so an imperfect-CSI operating point
+# can be swapped in without touching any of the ~30 training scripts:
+#   CF_DATA_ROOT=data_pilot_tau0.052 python3 ablation/main_map.py --seed 0
+# Unset (the default) loads exactly what it always did.
+DATA_ROOT = os.environ.get('CF_DATA_ROOT', 'data')
+if DATA_ROOT != 'data':
+    print(f'[process] CF_DATA_ROOT={DATA_ROOT}')
 
-AP_num_test = np.load('data/test/AP_num_test.npy') # (2000, )
-UE_num_test = np.load('data/test/UE_num_test.npy') # (2000, )
-loc_test = np.load('data/test/loc_test.npy') # (2000, max_ap_num+max_ue_num, 2)
-A_test = np.load('data/test/A_test.npy') # (2000, 3, max_ue_num)
-P_test = np.load('data/test/P_test.npy') # (2000, 3, max_ue_num)
-signal_test = np.load('data/test/signal_test.npy') # (2000, max_ue_num)
-interf_test = np.load('data/test/interf_test.npy') # (2000, max_ue_num)
-rate_test = np.load('data/test/rate_test.npy') # (7, 2000, max_ue_num)
+def _load(split, name):
+    return np.load(f'{DATA_ROOT}/{split}/{name}_{split}.npy')
+
+# read data
+AP_num_train = _load('train', 'AP_num') # (8000, )
+UE_num_train = _load('train', 'UE_num') # (8000, )
+loc_train = _load('train', 'loc') # (8000, max_ap_num+max_ue_num, 2)
+A_train = _load('train', 'A') # (8000, 3, max_ue_num)
+P_train = _load('train', 'P') # (8000, 3, max_ue_num)
+signal_train = _load('train', 'signal') # (8000, max_ue_num)
+interf_train = _load('train', 'interf') # (8000, max_ue_num)
+rate_train = _load('train', 'rate') # (7, 8000, max_ue_num)
+
+AP_num_test = _load('test', 'AP_num') # (2000, )
+UE_num_test = _load('test', 'UE_num') # (2000, )
+loc_test = _load('test', 'loc') # (2000, max_ap_num+max_ue_num, 2)
+A_test = _load('test', 'A') # (2000, 3, max_ue_num)
+P_test = _load('test', 'P') # (2000, 3, max_ue_num)
+signal_test = _load('test', 'signal') # (2000, max_ue_num)
+interf_test = _load('test', 'interf') # (2000, max_ue_num)
+rate_test = _load('test', 'rate') # (7, 2000, max_ue_num)
 
 # c7 = int(np.count_nonzero(AP_num_train == 7))
 # c8 = int(np.count_nonzero(AP_num_train == 8))
@@ -92,7 +104,7 @@ class RadioMapDataset(Dataset):
         return self.ap_num[idx], self.ue_num[idx], self.loc[idx], self.A[idx],\
                self.P[idx], self.value[idx]
 
-def split_train_val(data_norm, train_ratio=0.8, val_ratio=0.2):
+def split_train_val(data_norm, train_ratio=0.75, val_ratio=0.25):
     
     n_samples = len(loc_train)
     n_train = int(train_ratio * n_samples)

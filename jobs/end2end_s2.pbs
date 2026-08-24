@@ -1,0 +1,99 @@
+#!/bin/bash
+#PBS -N cf_end2end_s2
+#PBS -l select=1:ncpus=4:ngpus=1:mem=16gb:gpu_rp6000=False
+#PBS -l walltime=01:59:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5380367/GNN-final/logs/end2end_s2.pbslog
+
+set -uo pipefail
+cd /srv/scratch/z5380367/GNN-final
+
+# PBS only copies -o back once the job ends; write to scratch so a chained run
+# appends to one readable log
+exec >> /srv/scratch/z5380367/GNN-final/logs/end2end_s2.out 2>&1
+
+NAME=end2end_s2
+MARKER="result/pred/pred_end2end_seed2_mae.npy"
+PREREQ=""
+SELF=/srv/scratch/z5380367/GNN-final/jobs/end2end_s2.pbs
+QSUB=$(command -v qsub || echo /opt/pbs/bin/qsub)
+
+ATT_FILE=/srv/scratch/z5380367/GNN-final/logs/end2end_s2.attempt
+ATT=$(cat "$ATT_FILE" 2>/dev/null || echo 0)
+ATT=$((ATT + 1))
+echo "$ATT" > "$ATT_FILE"
+
+echo "=== $NAME | attempt $ATT | host $(hostname) | $(date '+%F %T') ==="
+
+if [ -f "$MARKER" ]; then
+    echo "=== $NAME COMPLETE (marker already present) ==="
+    exit 0
+fi
+
+# no-epoch-cap runs may need many 2h chunks; cap total GPU time regardless
+if [ "$ATT" -gt 90 ]; then
+    echo "=== $NAME GAVE UP after 90 attempts ==="
+    exit 1
+fi
+
+module load python/3.8.15
+export PYTHONPATH=.
+export PYTHONUNBUFFERED=1
+# interference-only variants must fine-tune against THIS campaign's main
+# signal branch, not the archived paper checkpoints
+export CF_MAIN_SIGNAL_TMPL='model/signal_main_seed{seed}.pth'
+nvidia-smi --query-gpu=name --format=csv,noheader
+
+# probe with a real kernel rather than matching compute capability against
+# torch.cuda.get_arch_list() -- an L40S reports sm_89, absent from the list,
+# yet works fine
+if ! python3 -c "import torch; torch.zeros(8, device='cuda').sum().item()" 2>/dev/null; then
+    echo "--- GPU unusable by this torch build: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1) -- requeueing ---"
+    "$QSUB" -a "$(date -d '+3 minutes' +%m%d%H%M)" "$SELF"
+    exit 0
+fi
+
+DEADLINE=$(($(date +%s) + 6600))
+
+run_stage() {
+    local rem=$((DEADLINE - $(date +%s)))
+    if [ "$rem" -lt 180 ]; then
+        return 124
+    fi
+    timeout "$rem" python3 $1
+}
+
+requeue_timeout() {
+    echo "--- soft time limit reached, checkpoint saved -- requeueing ---"
+    "$QSUB" "$SELF"
+    exit 0
+}
+
+step() {
+    run_stage "$1"
+    local rc=$?
+    if [ $rc -eq 124 ]; then requeue_timeout; fi
+    if [ $rc -ne 0 ]; then
+        echo "=== $NAME FAILED (exit $rc in: $1) ==="
+        exit $rc
+    fi
+}
+
+
+# Wait on prerequisites without occupying the GPU: requeue 30 minutes out.
+for p in $PREREQ; do
+    if [ ! -f "$p" ]; then
+        echo "--- prerequisite missing: $p -- requeueing in 30 min ---"
+        "$QSUB" -a "$(date -d '+30 minutes' +%m%d%H%M)" "$SELF"
+        exit 0
+    fi
+done
+
+step "ablation/end2end_map.py --seed 2 --max-epochs 1000000"
+if [ -f "$MARKER" ]; then
+    echo "=== $NAME COMPLETE $(date '+%F %T') ==="
+    exit 0
+fi
+
+echo "=== $NAME FAILED (marker $MARKER not written) ==="
+exit 1

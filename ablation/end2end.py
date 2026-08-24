@@ -302,7 +302,7 @@ if __name__ == "__main__":
         torch.save(model.state_dict(), model_path)
 
     # Test model
-    model.load_state_dict(torch.load(model_path, weights_only=True))
+    model.load_state_dict(torch.load(model_path, weights_only=True, map_location='cpu'))
     mse_loss, mae_loss, mae_mat = evaluate_model(model, snr)
     mae_flatten = mae_mat.numpy().flatten()
     mae_flatten = mae_flatten[~np.isnan(mae_flatten)]

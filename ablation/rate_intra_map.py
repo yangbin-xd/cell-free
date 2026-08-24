@@ -21,20 +21,17 @@ class RateModel(nn.Module):
         self.signal_model = SignalModel()
         self.interf_model = InterfModel()
         
-        # Load pretrained weights if available
-        if os.path.exists(signal_model_path):
-            self.signal_model.load_state_dict(torch.load(signal_model_path,
-                                                         weights_only=True))
-        #     print(f"Loaded pretrained signal model from {signal_model_path}")
-        # else:
-        #     print(f"Warning: Signal model path {signal_model_path} not found")
-            
-        if os.path.exists(interf_model_path):
-            self.interf_model.load_state_dict(torch.load(interf_model_path, weights_only=True))
-        #     print(f"Loaded pretrained interf model from {interf_model_path}")
-        # else:
-        #     print(f"Warning: Interf model path {interf_model_path} not found")
-        
+        # A missing checkpoint is a hard error: this stage fine-tunes pre-trained
+        # branches, and silently falling back to random weights yields a run that
+        # trains and logs normally without being the experiment it claims to be.
+        for module, path, what in ((self.signal_model, signal_model_path, 'signal'),
+                                   (self.interf_model, interf_model_path, 'interference')):
+            if not path or not os.path.exists(path):
+                raise FileNotFoundError(f'{what} checkpoint not found: {path!r}')
+            module.load_state_dict(torch.load(path, weights_only=True,
+                                              map_location='cpu'))
+
+
         for param in self.signal_model.parameters():
             param.requires_grad = False
         for param in self.interf_model.parameters():
@@ -305,7 +302,7 @@ if __name__ == "__main__":
         torch.save(model.state_dict(), model_path)
 
     # Test model
-    model.load_state_dict(torch.load(model_path, weights_only=True))
+    model.load_state_dict(torch.load(model_path, weights_only=True, map_location='cpu'))
     mse_loss, mae_loss, value, mae_mat = evaluate_model(model, snr)
     mae_flatten = mae_mat.numpy().flatten()
     mae_flatten = mae_flatten[~np.isnan(mae_flatten)]

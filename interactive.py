@@ -18,7 +18,12 @@ import matplotlib.patches as mpatches
 from matplotlib.widgets import Slider, Button
 
 matplotlib.rcParams['mathtext.fontset'] = 'cm'
-matplotlib.rcParams['font.family'] = 'times new roman'
+# 'Times New Roman' is absent on Katana; Nimbus Roman is URW's
+# metric-compatible clone of it. Without this chain matplotlib falls back
+# to DejaVu Sans and the figures come out in the wrong typeface entirely.
+matplotlib.rcParams['font.family'] = 'serif'
+matplotlib.rcParams['font.serif'] = ['Times New Roman', 'Nimbus Roman',
+                                     'DejaVu Serif']
 
 from process import (AP_num_test, UE_num_test, loc_test_norm,
                      A_test, P_test, signal_test, interf_test, rate_test,
@@ -58,28 +63,39 @@ class InteractiveDigitalTwin:
 
     # ────────────────────────── model loading ──────────────────────────
 
+    # Proposed model = the ablation campaign's seed-0 full model (Table I
+    # "Proposed"; see demo.py). Only a 15 dB rate head exists and it is the
+    # right one at every SNR: snr enters RateModel solely through
+    # `noise_dB = -87 - self.snr`, so no parameter is SNR-specific.
+    MODEL_STEM = os.environ.get('CF_MODEL_STEM', 'main_seed0')
+    SIGNAL_PATH = f'model/signal_{MODEL_STEM}.pth'
+    INTERF_PATH = f'model/interf_{MODEL_STEM}.pth'
+    RATE_PATH = f'model/rate_{MODEL_STEM}_15dB.pth'
+
+    @staticmethod
+    def _load_ckpt(module, path):
+        # Fail loudly: a missing checkpoint must not silently fall back to
+        # untrained weights (same reasoning as demo._load).
+        if not os.path.exists(path):
+            raise FileNotFoundError(f'checkpoint not found: {path!r}')
+        module.load_state_dict(torch.load(path, weights_only=True, map_location='cpu'))
+        module.eval()
+
     def _load_models(self):
         self.signal_model = SignalModel().to(self.device)
-        p = 'model/signal_map.pth'
-        if os.path.exists(p):
-            self.signal_model.load_state_dict(torch.load(p, weights_only=True))
-        self.signal_model.eval()
+        self._load_ckpt(self.signal_model, self.SIGNAL_PATH)
 
         self.interf_model = InterfModel().to(self.device)
-        p = 'model/interf_map.pth'
-        if os.path.exists(p):
-            self.interf_model.load_state_dict(torch.load(p, weights_only=True))
-        self.interf_model.eval()
+        self._load_ckpt(self.interf_model, self.INTERF_PATH)
 
         self._reload_rate_model()
 
     def _reload_rate_model(self):
-        """Load rate model for the current SNR."""
-        self.rate_model = RateModel(snr=self.snr).to(self.device)
-        p = f'model/rate_map_{self.snr}dB.pth'
-        if os.path.exists(p):
-            self.rate_model.load_state_dict(torch.load(p, weights_only=True))
-        self.rate_model.eval()
+        """Rebuild the rate model for the current SNR (same 15 dB checkpoint)."""
+        self.rate_model = RateModel(signal_model_path=self.SIGNAL_PATH,
+                                    interf_model_path=self.INTERF_PATH,
+                                    snr=self.snr).to(self.device)
+        self._load_ckpt(self.rate_model, self.RATE_PATH)
 
     # ────────────────────────── sample loading ─────────────────────────
 

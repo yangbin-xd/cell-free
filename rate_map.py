@@ -21,20 +21,20 @@ class RateModel(nn.Module):
         self.signal_model = SignalModel()
         self.interf_model = InterfModel()
         
-        # Load pretrained weights if available
-        if os.path.exists(signal_model_path):
-            self.signal_model.load_state_dict(torch.load(signal_model_path,
-                                                         weights_only=True))
-        #     print(f"Loaded pretrained signal model from {signal_model_path}")
-        # else:
-        #     print(f"Warning: Signal model path {signal_model_path} not found")
-            
-        if os.path.exists(interf_model_path):
-            self.interf_model.load_state_dict(torch.load(interf_model_path, weights_only=True))
-        #     print(f"Loaded pretrained interf model from {interf_model_path}")
-        # else:
-        #     print(f"Warning: Interf model path {interf_model_path} not found")
-        
+        # Load pretrained weights. A missing checkpoint is a hard error: this
+        # stage fine-tunes pre-trained branches, and silently falling back to
+        # random weights produces a run that trains and logs normally while not
+        # being the experiment it claims to be.
+        for module, path, what in ((self.signal_model, signal_model_path, 'signal'),
+                                   (self.interf_model, interf_model_path, 'interference')):
+            if not path or not os.path.exists(path):
+                raise FileNotFoundError(
+                    f'{what} checkpoint not found: {path!r}. RateModel fine-tunes '
+                    f'from pre-trained branches and must not start from random weights.')
+            module.load_state_dict(torch.load(path, weights_only=True,
+                                              map_location='cpu'))
+
+
         for param in self.signal_model.parameters():
             param.requires_grad = False
         for param in self.interf_model.parameters():
@@ -90,15 +90,27 @@ class RateModel(nn.Module):
         self.rate_mean = rate_mean
         self.rate_std = rate_std
         
-    def forward(self, x, ap_num, ue_num, A, P):
-        # Create edges for signal model
-        signal_edge_index, signal_edge_attr = self.signal_model.create_edges(x, ap_num,
-                                                                          ue_num, A, P)
+    def forward(self, x, ap_num, ue_num, A, P, edges=None):
+        if edges is None:
+            # Create edges for signal model
+            signal_edge_index, signal_edge_attr = self.signal_model.create_edges(x, ap_num,
+                                                                              ue_num, A, P)
 
-        # Create edges for interference model
-        interf_edge1_index, interf_edge1_attr, interf_edge2_index, interf_edge2_attr = \
-            self.interf_model.create_edges(x, ap_num, ue_num, A, P)
-        
+            # Create edges for interference model
+            interf_edge1_index, interf_edge1_attr, interf_edge2_index, interf_edge2_attr = \
+                self.interf_model.create_edges(x, ap_num, ue_num, A, P)
+        else:
+            # Pre-built edges, used by the differentiable association relaxation in
+            # joint_optimize.py. create_edges hard-thresholds A into an edge set, so
+            # a gradient w.r.t. the association only exists if it is bypassed. The
+            # branch forwards read num_aps/num_ues, which create_edges would
+            # otherwise have set as a side effect.
+            signal_edge_index, signal_edge_attr = edges['signal']
+            interf_edge1_index, interf_edge1_attr = edges['interf1']
+            interf_edge2_index, interf_edge2_attr = edges['interf2']
+            for _m in (self.signal_model, self.interf_model):
+                _m.num_aps, _m.num_ues = int(ap_num), int(ue_num)
+
         # Get signal predictions (normalized)
         pred_signal_norm = self.signal_model(x, signal_edge_index, signal_edge_attr)
         
@@ -305,7 +317,7 @@ if __name__ == "__main__":
         torch.save(model.state_dict(), model_path)
 
     # Test model
-    model.load_state_dict(torch.load(model_path, weights_only=True))
+    model.load_state_dict(torch.load(model_path, weights_only=True, map_location='cpu'))
     mse_loss, mae_loss, value, mae_mat = evaluate_model(model, snr)
     mae_flatten = mae_mat.numpy().flatten()
     mae_flatten = mae_flatten[~np.isnan(mae_flatten)]

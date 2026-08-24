@@ -1,0 +1,37 @@
+#!/bin/bash
+#PBS -N cf_alloc2k_min_500
+#PBS -l select=1:ncpus=2:mem=8gb
+#PBS -l walltime=03:00:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5380367/GNN-final/logs/alloc2k_min_500.pbslog
+
+set -uo pipefail
+cd /srv/scratch/z5380367/GNN-final
+exec >> /srv/scratch/z5380367/GNN-final/logs/alloc2k_min_500.out 2>&1
+
+NAME=alloc2k_min_500
+MARKER="result/ste_baselines_max_min_500_500.npz"
+echo "=== $NAME | host $(hostname) | $(date '+%F %T') ==="
+if [ -f "$MARKER" ]; then
+    echo "=== $NAME COMPLETE (marker already present) ==="
+    exit 0
+fi
+
+module load python/3.8.15
+export PYTHONPATH=.
+export PYTHONUNBUFFERED=1
+export CF_MODEL_STEM=main_seed0
+export CF_THREADS=1
+
+python3 ablation/ste_baselines.py --objective max_min --start 500 --n 500
+rc=$?
+if [ $rc -ne 0 ]; then
+    echo "=== $NAME FAILED (exit $rc) ==="
+    exit $rc
+fi
+if [ -f "$MARKER" ]; then
+    echo "=== $NAME COMPLETE $(date '+%F %T') ==="
+    exit 0
+fi
+echo "=== $NAME FAILED (marker not written) ==="
+exit 1

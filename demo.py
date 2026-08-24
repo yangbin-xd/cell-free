@@ -10,8 +10,45 @@ from main import plot_result
 import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.rcParams['mathtext.fontset'] = 'cm'
-matplotlib.rcParams['font.family'] = 'times new roman'
+# 'Times New Roman' is absent on Katana; Nimbus Roman is URW's
+# metric-compatible clone of it. Without this chain matplotlib falls back
+# to DejaVu Sans and the figures come out in the wrong typeface entirely.
+matplotlib.rcParams['font.family'] = 'serif'
+matplotlib.rcParams['font.serif'] = ['Times New Roman', 'Nimbus Roman',
+                                     'DejaVu Serif']
 font1, font2 = 24, 18
+
+# The proposed model IS the ablation campaign's seed-0 full model -- the
+# composition reported as the reference row of result/ablation_table.md (see
+# MAIN in ablation/make_ablation_table.py). These replace the archived
+# signal_map.pth / interf_map.pth / rate_map_{snr}dB.pth, which were a
+# different, unseeded training run.
+#
+# Only a 15 dB rate head exists for this variant, and it is the right one at
+# every SNR: snr enters RateModel solely through `noise_dB = -87 - self.snr` in
+# the closed-form SINR step (rate_map.py:117-125), so no parameter is
+# SNR-specific. See ablation/snr_eval.py, which sweeps 0-30 dB this way.
+PROPOSED = 'main_seed0'
+SIGNAL_PATH = f'model/signal_{PROPOSED}.pth'
+INTERF_PATH = f'model/interf_{PROPOSED}.pth'
+RATE_PATH = f'model/rate_{PROPOSED}_15dB.pth'
+
+
+def _load(module, path, what):
+    """Load a checkpoint, failing loudly if it is absent.
+
+    The `if os.path.exists(path): load(...)` guard this replaces is what let the
+    broken RATE_PATH f-string go unnoticed: a missing checkpoint left the module
+    at its constructor weights and everything downstream ran normally. Same
+    reasoning as ablation_common.load_branch.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f'{what} checkpoint not found: {path!r}. digital_twin evaluates the '
+            f'proposed model and must not fall back to untrained weights.')
+    module.load_state_dict(torch.load(path, weights_only=True,
+                                      map_location='cpu'))
+
 
 def digital_twin(snr=15, test_idx=0, do_plot=True, do_print=True):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -36,9 +73,7 @@ def digital_twin(snr=15, test_idx=0, do_plot=True, do_print=True):
 
     # digital twin
     SignalMap = SignalModel()
-    SignalMap_path = 'model/signal_map.pth'
-    if os.path.exists(SignalMap_path):
-        SignalMap.load_state_dict(torch.load(SignalMap_path, weights_only=True)) 
+    _load(SignalMap, SIGNAL_PATH, 'signal')
 
     SignalMap = SignalMap.to(device)
     SignalMap.eval()
@@ -49,9 +84,7 @@ def digital_twin(snr=15, test_idx=0, do_plot=True, do_print=True):
     pred_signal = pred_value.detach().cpu().numpy()
 
     InterfMap = InterfModel()
-    InterfMap_path = 'model/interf_map.pth'
-    if os.path.exists(InterfMap_path):
-        InterfMap.load_state_dict(torch.load(InterfMap_path, weights_only=True))
+    _load(InterfMap, INTERF_PATH, 'interference')
 
     InterfMap = InterfMap.to(device)
     SignalMap.eval()
@@ -62,10 +95,17 @@ def digital_twin(snr=15, test_idx=0, do_plot=True, do_print=True):
         pred_value = pred_value_norm * interf_std + interf_mean
     pred_interf = pred_value.detach().cpu().numpy()
 
-    RateMap = RateModel(snr=snr)
-    RateMap_path = f'model/rate_map_{snr}dB.pth'
-    if os.path.exists(RateMap_path):
-        RateMap.load_state_dict(torch.load(RateMap_path, weights_only=True))
+    # RATE_PATH holds a full RateModel state dict (both branches plus the
+    # fine-tuned heads), so it overrides the constructor's branches wholesale.
+    # The path was previously a plain string, not an f-string, so
+    # os.path.exists() was always False and the rate head was never loaded --
+    # every array produced through this function before 2026-07-30
+    # (plot_band.py's generator block -> pred_rate_error_*dB.npy,
+    # pred_rate_sum_*dB.npy, and the *_twin.pdf figures) is the PRE-fine-tuning
+    # composition of the archived branches, not the model it claimed to be.
+    RateMap = RateModel(signal_model_path=SIGNAL_PATH,
+                        interf_model_path=INTERF_PATH, snr=snr)
+    _load(RateMap, RATE_PATH, 'rate')
 
     RateMap = RateMap.to(device)
     RateMap.eval()

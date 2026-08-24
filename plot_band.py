@@ -8,8 +8,13 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgba
 matplotlib.rcParams['mathtext.fontset'] = 'cm'
-matplotlib.rcParams['font.family'] = 'times new roman'
-font1, font2 = 27, 23
+# 'Times New Roman' is absent on Katana; Nimbus Roman is URW's
+# metric-compatible clone of it. Without this chain matplotlib falls back
+# to DejaVu Sans and the figures come out in the wrong typeface entirely.
+matplotlib.rcParams['font.family'] = 'serif'
+matplotlib.rcParams['font.serif'] = ['Times New Roman', 'Nimbus Roman',
+                                     'DejaVu Serif']
+font1, font2 = 24, 20 # 27, 23
 
 # load data
 snr = 15
@@ -122,9 +127,16 @@ true_signal = np.load('result/true_signal.npy')
 true_interf = np.load('result/true_interf.npy')
 true_rate = np.load('result/true_rate.npy')
 
-pred_signal_error = np.load('result/pred/pred_signal_error.npy')
-pred_interf_error = np.load('result/pred/pred_interf_error.npy')
-pred_rate_error = np.load(f'result/pred/pred_rate_error_{snr}dB.npy')
+# Proposed = the ablation campaign's seed-0 full model (no epoch cap,
+# early stopping only; matches plot_pdf.py and make_ablation_table.py).
+# Signal/interf per-realization arrays come from ablation/make_band_arrays.py,
+# rate error and sum-rate from ablation/snr_eval.py. The archived flat arrays
+# one directory up are a different, unseeded run and are left untouched.
+PROPOSED = 'result/pred/main_seed0'
+
+pred_signal_error = np.load(f'{PROPOSED}/pred_signal_error.npy')
+pred_interf_error = np.load(f'{PROPOSED}/pred_interf_error.npy')
+pred_rate_error = np.load(f'{PROPOSED}/pred_rate_error_{snr}dB.npy')
 
 query_signal_error = np.load('result/query/query_signal_error.npy')
 query_interf_error = np.load('result/query/query_interf_error.npy')
@@ -138,16 +150,22 @@ beam_signal_error = np.load('result/beam/beam_signal_error.npy')
 beam_interf_error = np.load('result/beam/beam_interf_error.npy')
 beam_rate_error =   np.load(f'result/beam/beam_rate_error_{snr}dB.npy')
 
+ngo_signal_error = np.load('result/closed/closed_pl_signal_error.npy')
+ngo_interf_error = np.load('result/closed/closed_pl_interf_error.npy')
+ngo_rate_error = np.load(f'result/closed/closed_pl_rate_error_{snr}dB.npy')
+
 true_rate_sum = np.load(f'result/true_rate_sum_{snr}dB.npy')
-pred_rate_sum = np.load(f'result/pred/pred_rate_sum_{snr}dB.npy')
+pred_rate_sum = np.load(f'{PROPOSED}/pred_rate_sum_{snr}dB.npy')
 query_rate_sum = np.load(f'result/query/query_rate_sum_{snr}dB.npy')
 map_rate_sum = np.load(f'result/map/map_rate_sum_{snr}dB.npy')
 beam_rate_sum = np.load(f'result/beam/beam_rate_sum_{snr}dB.npy')
+ngo_rate_sum = np.load(f'result/closed/closed_pl_rate_sum_{snr}dB.npy')
 
 pred_rate_sum_error = np.abs(pred_rate_sum - true_rate_sum)
 query_rate_sum_error = np.abs(query_rate_sum - true_rate_sum)
 map_rate_sum_error = np.abs(map_rate_sum - true_rate_sum)
 beam_rate_sum_error = np.abs(beam_rate_sum - true_rate_sum)
+ngo_rate_sum_error = np.abs(ngo_rate_sum - true_rate_sum)
 
 def min_max_mean(signal_error, interf_error, rate_error):
     signal_min, signal_max, signal_mean = np.min(signal_error), np.max(signal_error),\
@@ -235,14 +253,17 @@ def plot_mean_band(x, y, term, color):
 # plot_mean_band(ue_num, beam_rate_sum, "map rate sum (bits/s/Hz)", '#68217A')
 # plt.show()
 
-def plot_mean_band3(x, y1, y2, y3, y4, term, min, max, label1="Baseline 1 [17]", label2="Baseline 2 [24]", label3="Baseline 3 [25]", label4="Proposed",
-                    color1="#F65314", color2="#FFBB00", color3="#7CBB00", color4="#00A1F1"):
-    x, y1, y2, y3, y4 = np.asarray(x), np.asarray(y1), np.asarray(y2), np.asarray(y3), np.asarray(y4)
+def plot_mean_band3(x, y1, y2, y3, y4, y5, term, min, max, label1="Baseline 2 [19]", label2="Baseline 3 [26]", label3="Baseline 4 [27]", label4="Proposed",
+                    label5="Baseline 1 [2]",
+                    color1="#FFBB00", color2="#7CBB00", color3="#00A1F1", color4="#68217A",
+                    color5="#F65314"):
+    x, y1, y2, y3, y4, y5 = np.asarray(x), np.asarray(y1), np.asarray(y2), np.asarray(y3), np.asarray(y4), np.asarray(y5)
 
     m1 = np.isfinite(x) & np.isfinite(y1)
     m2 = np.isfinite(x) & np.isfinite(y2)
     m3 = np.isfinite(x) & np.isfinite(y3)
     m4 = np.isfinite(x) & np.isfinite(y4)
+    m5 = np.isfinite(x) & np.isfinite(y5)
 
     xs = np.union1d(np.union1d(np.unique(x[m1]), np.unique(x[m2])), np.unique(x[m3]))
 
@@ -263,19 +284,27 @@ def plot_mean_band3(x, y1, y2, y3, y4, term, min, max, label1="Baseline 1 [17]",
     m2s, l2s, h2s = stats_by_x(x[m2], y2[m2], xs)
     m3s, l3s, h3s = stats_by_x(x[m3], y3[m3], xs)
     m4s, l4s, h4s = stats_by_x(x[m4], y4[m4], xs)
+    m5s, l5s, h5s = stats_by_x(x[m5], y5[m5], xs)
 
     plt.figure(figsize=(6.5, 5))
-    plt.plot(xs, m1s, marker='o', ms=7, lw=2, color=color1, label=label1)
+    plt.plot(xs, m5s, marker='o', ms=7, lw=2, color=color5, label=label5,
+             markerfacecolor='none', markeredgecolor=color5, markeredgewidth=1.5)
+    plt.fill_between(xs, l5s, h5s, color=to_rgba(color5, 0.1), edgecolor='none')
+    plt.plot(xs, m1s, marker='s', ms=7, lw=2, color=color1, label=label1,
+             markerfacecolor='none', markeredgecolor=color1, markeredgewidth=1.5)
     plt.fill_between(xs, l1s, h1s, color=to_rgba(color1, 0.1), edgecolor='none')
-    plt.plot(xs, m2s, marker='s', ms=7, lw=2, color=color2, label=label2)
+    plt.plot(xs, m2s, marker='^', ms=7, lw=2, color=color2, label=label2,
+             markerfacecolor='none', markeredgecolor=color2, markeredgewidth=1.5)
     plt.fill_between(xs, l2s, h2s, color=to_rgba(color2, 0.1), edgecolor='none')
-    plt.plot(xs, m3s, marker='^', ms=7, lw=2, color=color3, label=label3)
+    plt.plot(xs, m3s, marker='d', ms=7, lw=2, color=color3, label=label3,
+             markerfacecolor='none', markeredgecolor=color3, markeredgewidth=1.5)
     plt.fill_between(xs, l3s, h3s, color=to_rgba(color3, 0.1), edgecolor='none')
-    plt.plot(xs, m4s, marker='d', ms=7, lw=2, color=color4, label=label4)
-    plt.fill_between(xs, l4s, h4s, color=to_rgba(color3, 0.1), edgecolor='none')
+    plt.plot(xs, m4s, marker='p', ms=8, lw=2, color=color4, label=label4,
+             markerfacecolor='none', markeredgecolor=color4, markeredgewidth=1.5)
+    plt.fill_between(xs, l4s, h4s, color=to_rgba(color4, 0.1), edgecolor='none')
 
     plt.xlabel("UE number", fontsize=font1)
-    plt.ylabel(f"{term}", fontsize=font1-7)
+    plt.ylabel(f"{term}", fontsize=font1-3) # font1-7
     plt.ylim([min, max])
     plt.xticks(fontsize=font1)
     plt.yticks(fontsize=font1)
@@ -286,16 +315,16 @@ def plot_mean_band3(x, y1, y2, y3, y4, term, min, max, label1="Baseline 1 [17]",
 
 # plot mean band
 plot_mean_band3(ue_num, map_signal_error, query_signal_error, beam_signal_error, pred_signal_error,
-                "Signal power prediction error (dB)", 0, 8)
+                ngo_signal_error, "Signal power prediction error (dB)", 0, 8)
 plt.savefig('result/signal_band.pdf')
 plot_mean_band3(ue_num, map_interf_error, query_interf_error, beam_interf_error, pred_interf_error,
-                "Interf. power prediction error (dB)", 0, 10)
+                ngo_interf_error, "Interf. power prediction error (dB)", 0, 10)
 plt.savefig('result/interf_band.pdf')
 plot_mean_band3(ue_num, map_rate_error, query_rate_error, beam_rate_error, pred_rate_error,
-                "SE prediction error (bits/s/Hz)", 0, 2.5)
+                ngo_rate_error, "SE prediction error (bits/s/Hz)", 0, 2.5)
 plt.savefig('result/rate_band.pdf')
 plot_mean_band3(ue_num, map_rate_sum_error, query_rate_sum_error, beam_rate_sum_error, pred_rate_sum_error,
-                "Sum SE prediction error (bits/s/Hz)", 0, 25)
+                ngo_rate_sum_error, "Sum SE prediction error (bits/s/Hz)", 0, 25)
 plt.savefig('result/sumrate_band.pdf')
 plt.show()
 

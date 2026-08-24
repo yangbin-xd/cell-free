@@ -6,6 +6,8 @@ import numpy as np
 import torch.nn as nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from process import *
+from ablation_common import set_seed, add_common_args, variant_name, save_mae,\
+    train_resumable, clear_ckpt, GRAPH_FORWARD, RATE_FORWARD, load_branch
 from signal_angle_map import SignalModel
 from interf_angle_map import InterfModel
 
@@ -21,20 +23,10 @@ class RateModel(nn.Module):
         self.signal_model = SignalModel()
         self.interf_model = InterfModel()
         
-        # Load pretrained weights if available
-        if os.path.exists(signal_model_path):
-            self.signal_model.load_state_dict(torch.load(signal_model_path,
-                                                         weights_only=True))
-        #     print(f"Loaded pretrained signal model from {signal_model_path}")
-        # else:
-        #     print(f"Warning: Signal model path {signal_model_path} not found")
-            
-        if os.path.exists(interf_model_path):
-            self.interf_model.load_state_dict(torch.load(interf_model_path, weights_only=True))
-        #     print(f"Loaded pretrained interf model from {interf_model_path}")
-        # else:
-        #     print(f"Warning: Interf model path {interf_model_path} not found")
-        
+        load_branch(self.signal_model, signal_model_path, 'signal')
+        load_branch(self.interf_model, interf_model_path, 'interference')
+
+
         for param in self.signal_model.parameters():
             param.requires_grad = False
         for param in self.interf_model.parameters():
@@ -272,46 +264,36 @@ def test_model(model, snr, test_idx=0):
     print("Abs Error:", np.abs(pred_value.numpy() - true_value.numpy()), "bits/s/Hz")
 
 # Main execution
+# main
 if __name__ == "__main__":
+    args = add_common_args().parse_args()
+    name = variant_name('angle', args.tag, args.seed)
+    snr = args.snr
 
-    snr = 15
-    model = RateModel()
-    model_path = 'model/rate_angle_map.pth'
+    set_seed(args.seed)
+    model = RateModel(signal_model_path=f'model/signal_{name}.pth',
+                      interf_model_path=f'model/interf_{name}.pth', snr=snr)
+    model_path = f'model/rate_{name}_{snr}dB.pth'
 
     mse_loss, mae_loss, value, mae_mat = evaluate_model(model, snr)
-    mae_flatten = mae_mat.numpy().flatten()
-    mae_flatten = mae_flatten[~np.isnan(mae_flatten)]
-    np.save('result/pred/pred_rate_angle_mae.npy', mae_flatten)
-    print(f"Test MSE: {mse_loss:.3f}, "
-          f"Test RMSE: {np.sqrt(mse_loss):.3f}, "
-          f"Test MAE: {mae_loss:.3f}, "
-          f"Test SUM: {value:.3f}")
-    test_model(model, snr, test_idx=0)
+    save_mae(mae_mat, f'result/pred/pred_rate_{name}_mae.npy')
+    print(f"[rate_{name}] pre-finetune Test MAE: {mae_loss:.3f}")
 
-    if os.path.exists(model_path):
-        pass
-    
-    else:
+    if not os.path.exists(model_path):
         train_loader, val_loader = split_train_val(rate_norm[int(snr/5)], 0.8, 0.2)
-
-        # Fine-tune the model
-        model, train_losses, val_losses = train_model(model, train_loader, val_loader, 
-                                                      num_epochs=500)
-        # Save loss
-        np.save('loss/rate_angle_train_losses.npy', train_losses)
-        np.save('loss/rate_angle_val_losses.npy', val_losses)
-
-        # Save models
+        model, train_losses, val_losses = train_resumable(
+            model, train_loader, val_loader, args.max_epochs or 500,
+            RATE_FORWARD, nn.L1Loss(reduction='mean'), 1e-4,
+            model_path + '.ckpt')
+        np.save(f'loss/rate_{name}_train_losses.npy', train_losses)
+        np.save(f'loss/rate_{name}_val_losses.npy', val_losses)
         torch.save(model.state_dict(), model_path)
+        clear_ckpt(model_path + '.ckpt')
 
-    # Test model
-    model.load_state_dict(torch.load(model_path, weights_only=True))
+    model.load_state_dict(torch.load(model_path, weights_only=True,
+                                     map_location='cpu'))
     mse_loss, mae_loss, value, mae_mat = evaluate_model(model, snr)
-    mae_flatten = mae_mat.numpy().flatten()
-    mae_flatten = mae_flatten[~np.isnan(mae_flatten)]
-    np.save('result/pred/pred_rate_angle_finetune.npy', mae_flatten)
-    print(f"Test MSE: {mse_loss:.3f}, "
-          f"Test RMSE: {np.sqrt(mse_loss):.3f}, "
-          f"Test MAE: {mae_loss:.3f}, "
+    save_mae(mae_mat, f'result/pred/pred_rate_{name}_finetune.npy')
+    print(f"[rate_{name}] Test MSE: {mse_loss:.3f}, "
+          f"Test RMSE: {np.sqrt(mse_loss):.3f}, Test MAE: {mae_loss:.3f}, "
           f"Test SUM: {value:.3f}")
-    test_model(model, snr, test_idx=0)

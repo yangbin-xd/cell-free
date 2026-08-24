@@ -4,7 +4,12 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 matplotlib.rcParams['mathtext.fontset'] = 'cm'
-matplotlib.rcParams['font.family'] = 'times new roman'
+# 'Times New Roman' is absent on Katana; Nimbus Roman is URW's
+# metric-compatible clone of it. Without this chain matplotlib falls back
+# to DejaVu Sans and the figures come out in the wrong typeface entirely.
+matplotlib.rcParams['font.family'] = 'serif'
+matplotlib.rcParams['font.serif'] = ['Times New Roman', 'Nimbus Roman',
+                                     'DejaVu Serif']
 font1, font2 = 22, 18
 np.set_printoptions(precision=3, suppress=True, linewidth=100)
 
@@ -250,50 +255,101 @@ class CellFree:
                 P[l, idx] = w
         return P
     
+    @staticmethod
+    def _unit(x):
+        """Row-normalise the last axis, leaving all-zero vectors at zero.
+
+        DeepMIMO contains fully blocked AP-UE pairs (beta down to 1e-16, and
+        exactly 0 for some), so a bare x/||x|| yields NaN. The loop version this
+        replaced never hit it: it only normalised links with A[l,k]==1.
+        """
+        n = np.linalg.norm(x, axis=-1, keepdims=True)
+        return x / np.where(n > 0, n, 1.0)
+
+    def _estimate(self, h, pilot_snr, rng):
+        """MMSE channel estimate under uplink pilot training.
+
+            h_hat = sqrt(1-tau2)*h + sqrt(tau2)*e,  e ~ CN(0, beta*I_N)
+            tau2_lk = 1 / (1 + pilot_snr * beta_lk)
+
+        tau2 is the NMSE and is per-link: beta spans ~29 dB across serving
+        links here, so weak links (distant APs, cell-edge UEs) are estimated
+        far worse than strong ones. A single global tau2 would instead be a
+        pure constant offset on the signal map (measured: 0.002 dB spread
+        across UEs) that the GNN absorbs as a bias, i.e. no experiment at all.
+
+        Note only the DIRECTION of h_hat survives into MRT (w = h_hat/||h_hat||),
+        so the sqrt(1-tau2) convention here and the strict-MMSE (1-tau2) scaling
+        give identical SINRs. Blocked links have beta = 0, hence e = 0 and
+        h_hat = 0, so they stay zero without a special case.
+        """
+        beta = (np.abs(h) ** 2).mean(axis=(2, 3))            # (L,K) large-scale
+        tau2 = 1.0 / (1.0 + pilot_snr * beta)
+        scale = np.sqrt(beta / 2.0)[:, :, None, None]
+        e = (rng.standard_normal(h.shape) + 1j * rng.standard_normal(h.shape)) * scale
+        t2 = tau2[:, :, None, None]
+        return np.sqrt(1.0 - t2) * h + np.sqrt(t2) * e
+
+    def _powers(self, h, w, sqrtPA):
+        """(signal, interference) power per (UE, subcarrier), both (K, Nc).
+
+        G[l,k,m,nc] = h_lk^H w_lm is the effective channel from AP l's beam
+        aimed at UE m onto UE k -- the signal term is its diagonal in (k,m) and
+        the interference term is everything else, coherently summed over the
+        APs serving each interferer.
+        """
+        G = np.einsum('lknd,lmnd->lkmn', h.conj(), w)        # (L,K,K,Nc)
+        T = np.einsum('lm,lkmn->kmn', sqrtPA, G)             # (K,K,Nc)
+        diag = np.einsum('kkn->kn', T)
+        signal = np.abs(diag) ** 2
+        interf = (np.abs(T) ** 2).sum(axis=1) - signal
+        return signal, interf
+
     # calculate SINR
-    def calculate_sinr(self, A, P):
-        SNR = np.arange(0,31,5)
+    def calculate_sinr(self, A, P, pilot_snr=np.inf, mc=1, rng=None):
+        """Per-UE signal power (dB), interference power (dB) and rate.
+
+        pilot_snr = inf reproduces the perfect-CSI behaviour of the original
+        quadruple loop exactly (verified to 5.4e-7 dB on the committed
+        datasets); any finite value builds the MRT precoder from an estimate
+        while the channel the beam actually traverses stays the true one.
+
+        mc averages over independent estimation-error draws. The measured
+        irreducible label spread at mc=1 is <= 0.03 dB (signal) / 0.12 dB
+        (interference) against MAEs of 1.0-1.6 dB, so mc=1 is the default; the
+        knob exists in case the nominal operating point pushes weak-link tau2
+        high enough to matter.
+        """
+        SNR = np.arange(0, 31, 5)
+        noise_power = 10.0 ** ((-87 - SNR) / 10)             # (7,)
+
+        h = self.CSI_select[..., 0]                          # (L,K,Nc,Nt)
+        sqrtPA = np.sqrt(P) * A                              # (L,K)
+
         signal_power = np.zeros((self.K, self.Nc))
         interf_power = np.zeros((self.K, self.Nc))
-        # interf_temp = np.zeros((self.L, self.K, self.Nc)) # add
-        SINR = np.zeros((SNR.size, self.K, self.Nc))
         rate = np.zeros((SNR.size, self.K, self.Nc))
-        for k in range(self.K):
-            for nc in range(self.Nc):
-                
-                # calculate signal
-                signal = 0
-                for l in range(self.L):
-                    h_lk = self.CSI_select[l, k, nc, :] # (32, 1)
-                    if A[l, k] == 1:    
-                        w_lk = h_lk / (np.linalg.norm(h_lk))
-                        signal += np.sqrt(P[l, k]) * \
-                                  np.transpose(h_lk.conjugate()) @ w_lk
-                
-                # calculate interference
-                interf_pow = 0
-                for m in range(self.K):
-                    if m == k:
-                        continue
 
-                    interf = 0
-                    for l in range(self.L):
-                        if A[l, m] == 1:
-                            h_lk = self.CSI_select[l, k, nc, :]
-                            h_lm = self.CSI_select[l, m, nc, :]
-                            w_lm = h_lm / (np.linalg.norm(h_lm))
-                            interf += np.sqrt(P[l, m]) * np.transpose(h_lk.conjugate()) @ w_lm
+        perfect = not np.isfinite(pilot_snr)
+        if not perfect and rng is None:
+            rng = np.random.default_rng()
 
-                    interf_pow += np.abs(interf) ** 2
+        for _ in range(mc):
+            w = self._unit(h if perfect else self._estimate(h, pilot_snr, rng))
+            s, i = self._powers(h, w, sqrtPA)
+            signal_power += s
+            interf_power += i
+            # rate is averaged over draws too: the ergodic SE under imperfect
+            # CSI is E[log2(1+SINR)], not log2(1+E[SINR]). At mc=1 the two
+            # coincide and this reduces to the original expression.
+            rate += np.log2(1 + s[None] / (i[None] + noise_power[:, None, None]))
+            if perfect:
+                break                                        # draws are identical
 
-                signal_power[k, nc] = np.abs(signal) ** 2
-                interf_power[k, nc] = interf_pow
-
-                for i, snr in enumerate(SNR):
-                    noise_dB = -87 - snr
-                    noise_power = 10 ** (noise_dB / 10)
-                    SINR[i, k, nc] = signal_power[k, nc] / (interf_power[k, nc] + noise_power)
-                    rate[i, k, nc] = np.log2(1 + SINR[i, k, nc])
+        draws = 1 if perfect else mc
+        signal_power /= draws
+        interf_power /= draws
+        rate /= draws
 
         signal_power_mean = 10 * np.log10(np.mean(signal_power, -1))
         interf_power_mean = 10 * np.log10(np.mean(interf_power, -1))

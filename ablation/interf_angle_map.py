@@ -8,6 +8,8 @@ import torch.nn as nn
 from torch_geometric.nn import TransformerConv
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from process import *
+from ablation_common import set_seed, add_common_args, variant_name, save_mae,\
+    train_resumable, clear_ckpt, GRAPH_FORWARD, RATE_FORWARD
 
 class InterfModel(nn.Module):
     def __init__(self, hidden=128, head=4, layers=1):
@@ -282,32 +284,26 @@ def test_model(model, test_idx=0):
 
 # main
 if __name__ == "__main__":
+    args = add_common_args().parse_args()
+    name = variant_name('angle', args.tag, args.seed)
 
+    set_seed(args.seed)
     model = InterfModel()
-    model_path = 'model/interf_angle_map.pth'
-    
-    if os.path.exists(model_path):
-        pass
+    model_path = f'model/interf_{name}.pth'
 
-    else:
+    if not os.path.exists(model_path):
         train_loader, val_loader = split_train_val(interf_norm, 0.8, 0.2)
-        # Train model
-        model, train_losses, val_losses = train_model(model, train_loader, val_loader,
-                                                      num_epochs=500)
-        # Save loss
-        np.save('loss/interf_angle_train_losses.npy', train_losses)
-        np.save('loss/interf_angle_val_losses.npy', val_losses)
-
-        # Save model
+        model, train_losses, val_losses = train_resumable(
+            model, train_loader, val_loader, args.max_epochs or 500,
+            GRAPH_FORWARD, nn.MSELoss(), 1e-3, model_path + '.ckpt')
+        np.save(f'loss/interf_{name}_train_losses.npy', train_losses)
+        np.save(f'loss/interf_{name}_val_losses.npy', val_losses)
         torch.save(model.state_dict(), model_path)
+        clear_ckpt(model_path + '.ckpt')
 
-    # Test model
-    model.load_state_dict(torch.load(model_path, weights_only=True))
+    model.load_state_dict(torch.load(model_path, weights_only=True,
+                                     map_location='cpu'))
     mse_loss, mae_loss, mae_mat = evaluate_model(model)
-    mae_flatten = mae_mat.numpy().flatten()
-    mae_flatten = mae_flatten[~np.isnan(mae_flatten)]
-    np.save('result/pred/pred_interf_angle_mae.npy', mae_flatten)
-    print(f"Test MSE: {mse_loss:.3f}, "
-          f"Test RMSE: {np.sqrt(mse_loss):.3f}, "
-          f"Test MAE: {mae_loss:.3f}")
-    test_model(model, test_idx=0)
+    save_mae(mae_mat, f'result/pred/pred_interf_{name}_mae.npy')
+    print(f"[interf_{name}] Test MSE: {mse_loss:.3f}, "
+          f"Test RMSE: {np.sqrt(mse_loss):.3f}, Test MAE: {mae_loss:.3f}")

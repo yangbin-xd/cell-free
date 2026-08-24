@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+
+echo "=== Installing dependencies ==="
+pip install --no-cache-dir --quiet \
+    torch \
+    torch-geometric \
+    numpy \
+    scipy \
+    scikit-learn \
+    matplotlib \
+    PyKrige || { echo "ERROR: pip install failed"; exit 1; }
+
+echo "=== Sanity check ==="
+is_lfs_pointer() { head -c 50 "$1" 2>/dev/null | grep -q "git-lfs"; }
+
+for f in /data/BS_loc.npy /data/UE_loc.npy /data/CSI.npy; do
+    [ -e "$f" ] || { echo "ERROR: $f missing"; exit 1; }
+    is_lfs_pointer "$f" && { echo "ERROR: $f LFS pointer"; exit 1; }
+    echo "OK: $f ($(stat -c%s "$f") bytes)"
+done
+
+for f in model/signal_main_seed0.pth model/interf_main_seed0.pth model/rate_main_seed0_15dB.pth; do
+    [ -e "$f" ] || { echo "ERROR: $f missing"; exit 1; }
+    is_lfs_pointer "$f" && { echo "ERROR: $f LFS pointer"; exit 1; }
+    echo "OK: $f ($(stat -c%s "$f") bytes)"
+done
+
+for f in result/map/map_signal.npy result/true_signal.npy; do
+    [ -e "$f" ] || { echo "WARN: $f missing"; continue; }
+    is_lfs_pointer "$f" && { echo "ERROR: $f is LFS pointer — upload real result/ folder"; exit 1; }
+done
+
+mkdir -p data
+ln -sfn /data/BS_loc.npy data/BS_loc.npy
+ln -sfn /data/UE_loc.npy data/UE_loc.npy
+ln -sfn /data/CSI.npy    data/CSI.npy
+[ -d /data/train ] && ln -sfn /data/train data/train
+[ -d /data/test ]  && ln -sfn /data/test  data/test
+
+mkdir -p /results/result/pred /results/result/query /results/result/beam /results/result/map
+cp -rn result/* /results/result/ 2>/dev/null || true
+rm -rf result
+ln -sfn /results/result result
+
+# --- Helper: run a Python script with np.load patched to allow_pickle=True ---
+# and font-warnings filtered out
+run_py() {
+    local script="$1"
+    echo "=== Running: $script ==="
+    if [ ! -e "$script" ]; then
+        echo "SKIP: $script not found"
+        return 0
+    fi
+    python -c "
+import numpy as np
+_orig = np.load
+np.load = lambda *a, **kw: _orig(*a, **{**{'allow_pickle': True}, **kw})
+exec(compile(open('$script').read(), '$script', 'exec'), {'__name__': '__main__'})
+" 2> >(grep -v 'findfont:' >&2 || true) || echo "WARN: $script failed (continuing)"
+}
+
+run_py demo.py
+run_py twin.py
+run_py scenario.py
+run_py analyze.py
+run_py plot_pdf.py
+run_py plot_band.py
+run_py plot_snr.py
+run_py plot_loss.py
+
+echo "=== Collecting PDFs into /results/ ==="
+find /results/result/ -name '*.pdf' -exec mv {} /results/ \;
+ls -lh /results/*.pdf 2>/dev/null || echo "No PDFs produced"

@@ -63,7 +63,7 @@ def digital_twin(snr=15, test_idx=0, do_plot=True, do_print=True):
     pred_interf = pred_value.detach().cpu().numpy()
 
     RateMap = RateModel(snr=snr)
-    RateMap_path = 'model/rate_map_{snr}dB.pth'
+    RateMap_path = f'model/rate_map_{snr}dB.pth'
     if os.path.exists(RateMap_path):
         RateMap.load_state_dict(torch.load(RateMap_path, weights_only=True))
 

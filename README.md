@@ -25,51 +25,54 @@ Interative demo of this work: https://huggingface.co/spaces/Bin-Yang/cell-free
 Video introducing radio map: https://www.youtube.com/watch?v=KqihgPd0c2o
 
 ## 🛠️ Please follow the following steps:
-__1. Configure virtual environment for this repository__  
-```python
-# Create virtual environment for this repository  
-python3 -m venv env_CF 
-
-# Activate the created environment
-source env_CF/bin/activate
-```
-
-__2. Download the repository to local__
-```python
+__1. Download the repository to local__
+```bash
 # git clone the repository to your folder
-git clone https://github.com/yangbin-xd/cell-free.git  
+git clone https://github.com/yangbin-xd/cell-free.git
 
 # cd to the folder
 cd cell-free
 ```
 
+__2. Configure virtual environment for this repository__
+```bash
+# Create virtual environment (requires Python 3.8–3.11, tested on 3.11)
+python3 -m venv env_CF
+
+# Activate the created environment
+source env_CF/bin/activate
+```
+
 __3. Install the required modules__
-```python
-# pip install required modules according to the requirements
+```bash
+# pip install the minimal required modules
 pip install -r requirements.txt
+
+# (optional) to reproduce the exact frozen environment used in the paper:
+# pip install -r full_requirements.txt
 ```
 
 __4. Then, you can run files__
-```python
-# a user-centric cell-free network demo  
+```bash
+# a user-centric cell-free network demo
 python main.py
 
-# run Baseline 1   
+# run Baseline 1
 python sinr_map.py
 
-# run Baseline 2   
-python radio_map.py && python query.py  
+# run Baseline 2
+python radio_map.py && python query.py
 
-# run Baseline 3  
-python Kriging.py && python beam.py  
+# run Baseline 3
+python Kriging.py && python beam.py
 
-# The proposed radio map-enabled digital twin  
-python signal_map.py  
+# The proposed radio map-enabled digital twin
+python signal_map.py
 python interf_map.py
-python rate_map.py  
+python rate_map.py
 
 # Test the proposed method
-python demo.py  
+python demo.py
 ```
 
 ## 👤 Authors:  
@@ -95,8 +98,10 @@ interf_map.py is GNN-based interference power prediction
 rate_map.py is achievable rate prediction  
 demo.py is to test the proposed approach  
 
-## 🚀 Environment:  
+## 🚀 Environment:
+Python                  3.8–3.11 (tested on 3.11)  
 numpy                   1.24.4  
 matplotlib              3.7.5  
 torch                   2.4.1  
-__Details please see requirements.txt__
+torch-geometric         2.6.1  
+__Details please see requirements.txt (minimal) and full_requirements.txt (exact frozen environment)__  

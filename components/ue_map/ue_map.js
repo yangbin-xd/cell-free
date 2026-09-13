@@ -35,10 +35,15 @@
   function send(type, payload) {
     window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, payload || {}), "*");
   }
+  // index.html may already have sent componentReady (early, before Plotly
+  // loaded) and parked the first render args in window.__ueMapEarly.pending;
+  // from here on this listener owns render messages.
+  const early = window.__ueMapEarly || null;
+  window.__ueMapReady = true;
   window.addEventListener("message", function (ev) {
     if (ev.data && ev.data.type === "streamlit:render") onRender(ev.data.args || {});
   });
-  send("streamlit:componentReady", { apiVersion: 1 });
+  if (!early) send("streamlit:componentReady", { apiVersion: 1 });
 
   // ── geometry helpers (must match dyn_users.py) ───────────────────────────
   function nearestDist(x, y) {
@@ -275,4 +280,5 @@
     buildLayout: buildLayout, tick: tick, emit: emit, onRender: onRender,
     state: function () { return { epoch: epoch, seq: seq, pos: pos, moving: moving, timer: timer !== null }; },
   };
+  if (early && early.pending) { const a = early.pending; early.pending = null; onRender(a); }
 })();

@@ -12,5 +12,3 @@ streamlit.log
 env_CF/
 visits.py
 
-# generated at app start from plotly.offline.get_plotlyjs()
-components/ue_map/plotly.min.js

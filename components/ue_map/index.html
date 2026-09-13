@@ -5,13 +5,31 @@
 <style>
   html, body { margin: 0; padding: 0; background: #1a1a2e; overflow: hidden; }
   #gd { width: 100%; touch-action: none; user-select: none; -webkit-user-select: none; }
+  #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+             color: #cfd3e6; font: 15px/1.4 "Source Sans Pro", sans-serif; }
 </style>
-<!-- plotly.min.js is written next to this file by app.py on first start
-     (plotly.offline.get_plotlyjs()); it is git-ignored. -->
-<script src="plotly.min.js"></script>
+<script>
+  /* Tell Streamlit we are alive BEFORE the Plotly bundle downloads: on a slow
+     (mobile) link the ~1 MB library takes longer than Streamlit's component
+     timeout, which otherwise shows "having trouble loading the component".
+     Render args that arrive before ue_map.js is ready are kept in `pending`
+     and replayed by ue_map.js once it has loaded. */
+  window.__ueMapEarly = { pending: null };
+  window.addEventListener("message", function (ev) {
+    if (!window.__ueMapReady && ev.data && ev.data.type === "streamlit:render") {
+      window.__ueMapEarly.pending = ev.data.args || {};
+    }
+  });
+  window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
+  window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: 548 }, "*");
+</script>
+<!-- plotly.min.js = plotly.js "basic" partial bundle (scatter/bar/pie), committed
+     in the repo; the map only uses scatter traces.  If the file is missing,
+     app.py regenerates a (full) bundle from plotly.offline.get_plotlyjs(). -->
+<script src="plotly.min.js" defer></script>
 </head>
 <body>
-<div id="gd"></div>
-<script src="ue_map.js?v=1"></script>
+<div id="gd"><div id="loading">Loading map…</div></div>
+<script src="ue_map.js?v=2" defer></script>
 </body>
 </html>

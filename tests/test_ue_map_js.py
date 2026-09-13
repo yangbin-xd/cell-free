@@ -78,6 +78,22 @@ class UeMapJsTests(unittest.TestCase):
     def test_component_ready_sent_on_load(self):
         self.assertEqual(self.posted()[0]["type"], "streamlit:componentReady")
 
+    def test_early_ready_from_index_html_is_not_repeated_and_pending_args_replayed(self):
+        # index.html sends componentReady before Plotly loads and parks the
+        # first render args; ue_map.js must not send a second ready and must
+        # render the parked args.
+        ctx = quickjs.Context()
+        ctx.eval(STUBS)
+        ctx.eval("window.__ueMapEarly = {pending: %s};" % json.dumps(_args(epoch=1)))
+        with open(JS_PATH, encoding="utf-8") as f:
+            ctx.eval(f.read())
+        posted = json.loads(ctx.eval("JSON.stringify(__posted)"))
+        self.assertFalse(any(m["type"] == "streamlit:componentReady" for m in posted))
+        st = json.loads(ctx.eval("JSON.stringify(window.__ueMapTest.state())"))
+        self.assertEqual(st["epoch"], 1)
+        self.assertEqual(len(st["pos"]), len(_args(epoch=1)["positions"]))
+        self.assertTrue(ctx.eval("window.__ueMapReady === true"))
+
     def test_render_adopts_positions_and_reacts(self):
         self.render(_args())
         st = self.state()

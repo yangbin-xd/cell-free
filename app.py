@@ -218,7 +218,9 @@ _N_TEST      = len(AP_num_test)
 
 # ─── Interactive map component (drag + Brownian motion) ──────────────────────
 # Plotly.js is served from the component dir so the iframe never depends on a
-# CDN; the bundle is generated from the installed plotly package on first start.
+# CDN.  The committed components/ue_map/plotly.min.js is the plotly.js "basic"
+# partial bundle (~1.1 MB; the map only draws scatter traces).  Fallback: if it
+# is missing, the full bundle is generated from the installed plotly package.
 _COMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          "components", "ue_map")
 _PLOTLY_JS = os.path.join(_COMP_DIR, "plotly.min.js")

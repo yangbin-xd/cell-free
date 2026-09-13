@@ -101,6 +101,7 @@ binyang_2020@163.com
 `main.py` shows the user-centric cell-free realization  
 `baseline/` holds all baselines: `sinr_map.py` (Baseline 1), `radio_map.py` & `query.py` (Baseline 2), `Kriging.py` & `beam.py` (Baseline 3), `analytical.py` / `closed.py` / `closed_pathloss.py` (closed-form statistical baselines), `wmmse_admm_optimizer.py` / `socp_optimizer.py` / `apg_optimizer.py` (baseline optimizers)  
 `signal_map.py` / `interf_map.py` / `rate_map.py` define the GNN models for signal, interference, and rate prediction  
+`components/ue_map/` is the interactive map of the web app (drag UEs, Brownian motion); `dyn_users.py` holds the numpy helpers (measured-region clamp, nearest-grid truth); `tests/` has their unit tests (`python3 -m unittest discover tests`)  
 `ablation/` is the seeded training + ablation campaign (entry: `ablation/main_map.py`); `jobs/` holds the PBS job generator (`jobs/gen_jobs.py`)  
 `demo.py` tests the proposed approach  
 `app.py` is the web application (Streamlit); `agent.py` parses natural-language intents (LLM with regex fallback); `closed_loop.py` validates and re-optimizes; `joint_optimize.py` / `power_only.py` are the proposed optimizers  

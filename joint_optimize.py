@@ -366,7 +366,7 @@ def _compute_loss(rate_masked, objective, ue_num,
                   secondary_type=None, min_rate_floor=None,
                   ue_abs_floor=None, baseline_t=None,
                   primary_mask=None, bare_mask=None,
-                  secondary_weight_scale=1.0):
+                  secondary_weight_scale=1.0, freeze_mask=None):
     """Compute objective loss + constraint penalties.
 
     ``secondary_weight_scale`` (default 1.0 → unchanged) multiplies every
@@ -421,14 +421,31 @@ def _compute_loss(rate_masked, objective, ue_num,
             _loss_terms = []
 
             # Concrete-target part: aim for 2× requested increase with
-            # stretched = 2*target_floor - baseline.
+            # stretched = 2*target_floor - baseline. The full-strength pull
+            # only applies BELOW the user's requested floor; between floor
+            # and stretched the pull drops to _MET_PULL so a UE that already
+            # met its request stops hogging power/topology from groups that
+            # have not (the "+50% group lands at +150% while the +20% group
+            # starves" failure mode).
             if _cm_on_tgt.any():
+                _MET_PULL = 0.3
                 stretched = 2.0 * target_floor_t - baseline_t
                 _rate_c   = rate_masked[target_mask][_cm_on_tgt]
                 _str_c    = stretched[target_mask][_cm_on_tgt]
+                _flr_c    = target_floor_t[target_mask][_cm_on_tgt]
                 _scale_c  = _scale[_cm_on_tgt]
-                # Below stretched: push up (relu penalty)
-                below = torch.relu(_str_c - _rate_c) / _scale_c
+                gap_floor = torch.relu(_flr_c - _rate_c)
+                gap_mid   = (torch.relu(_str_c - _rate_c) - gap_floor).clamp(min=0)
+                # freeze_mask (closed-loop retries): UEs that already met
+                # their requirement with margin keep ONLY the floor pull —
+                # zero mid-region pull, so the freed resources go to the
+                # still-failing UEs instead of re-feeding the satisfied ones.
+                _pull_c = torch.full_like(gap_mid, _MET_PULL)
+                if freeze_mask is not None:
+                    _frz_sub = freeze_mask[target_mask][_cm_on_tgt]
+                    _pull_c = torch.where(_frz_sub,
+                                          torch.zeros_like(_pull_c), _pull_c)
+                below = (gap_floor + _pull_c * gap_mid) / _scale_c
                 # Above stretched: gently push down
                 above = torch.relu(_rate_c - _str_c) * 0.5 / _scale_c
                 _wv_c = _weights_for(_cm_on_tgt)
@@ -504,6 +521,14 @@ def _compute_loss(rate_masked, objective, ue_num,
             _wv_c = _weights_for(_cm_on_tgt)
             if _wv_c is not None:
                 target_gap = target_gap * _wv_c
+                # Non-primary target UEs are a below-primary tier — the
+                # closed loop's secondary_weight_scale must reach them too
+                # (the docstring's "every below-primary penalty term").
+                if secondary_weight_scale != 1.0:
+                    _pri_sub = primary_mask[target_mask][_cm_on_tgt]
+                    target_gap = torch.where(
+                        _pri_sub, target_gap,
+                        target_gap * secondary_weight_scale)
             loss = loss + penalty_secondary * torch.sum(target_gap)
 
     if protect_mask is not None and floor_t is not None and protect_mask.any():
@@ -604,7 +629,7 @@ def joint_optimize(rate_model, loc_norm, ap_num, ue_num, A_np, snr,
                    baseline_rates=None, min_rate_floor=None,
                    ue_multipliers=None, ue_abs_floor=None,
                    bare_targets=None, init_P=None,
-                   secondary_weight_scale=1.0,
+                   secondary_weight_scale=1.0, ue_freeze=None,
                    n_starts=1, disc_thresholds=(0.5,)):
     """Jointly optimize AP selection (A) and power allocation (P).
 
@@ -739,6 +764,15 @@ def joint_optimize(rate_model, loc_norm, ap_num, ue_num, A_np, snr,
             if 0 <= k < ue_num:
                 _bare_mask_t[k] = True
 
+    # freeze_mask: closed-loop retry knob — targets already met with margin
+    # keep only their floor protection (see _compute_loss).
+    _freeze_mask_t = None
+    if has_targets and ue_freeze:
+        _freeze_mask_t = torch.zeros(ue_num, dtype=torch.bool, device=device)
+        for k in ue_freeze:
+            if 0 <= k < ue_num:
+                _freeze_mask_t[k] = True
+
     _loss_kwargs = dict(
         target_mask=target_mask if has_targets else None,
         protect_mask=protect_mask if has_targets else None,
@@ -752,6 +786,7 @@ def joint_optimize(rate_model, loc_norm, ap_num, ue_num, A_np, snr,
         primary_mask=_primary_mask_t,
         bare_mask=_bare_mask_t,
         secondary_weight_scale=secondary_weight_scale,
+        freeze_mask=_freeze_mask_t,
     )
 
     # ── Phase 0: Power-informed initialization ─────────────────────────

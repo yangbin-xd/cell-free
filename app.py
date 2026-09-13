@@ -2,6 +2,7 @@
 
 import os
 import re
+import copy
 import json
 import streamlit as st
 import streamlit.components.v1 as components
@@ -46,6 +47,32 @@ log_visit_once()
 st.markdown("""
 <style>
     .block-container { padding-top: 2rem; padding-bottom: 0.5rem; }
+
+    /* Component iframes are inline by default: the baseline gap (~7 px)
+       would push the control row under the map below the SNR row. */
+    iframe[data-testid="stCustomComponentV1"] { display: block !important; }
+
+    /* Control row under the map (Start/Stop | speed | Prev | Next | Reset):
+       every box must stay 1 line high so the row is level with the SNR row. */
+    .st-key-ctrl_row .stButton button {
+        padding-left: 0.5rem !important; padding-right: 0.5rem !important;
+    }
+    .st-key-ctrl_row .stButton button, .st-key-ctrl_row .stButton button * {
+        white-space: nowrap !important; word-break: keep-all !important;
+    }
+    .st-key-ctrl_row [data-testid="stSliderTickBar"] { display: none !important; }
+    .st-key-ctrl_row [data-testid="stSlider"] {
+        position: relative; padding-bottom: 0 !important;
+    }
+    /* plain "0" / "5" end labels (the thumb label already says "speed = …") */
+    .st-key-ctrl_row [data-testid="stSlider"]::before,
+    .st-key-ctrl_row [data-testid="stSlider"]::after {
+        position: absolute; bottom: -0.9rem; font-size: 0.72rem;
+        line-height: 1; opacity: 0.6; pointer-events: none;
+        font-family: "Source Code Pro", monospace;
+    }
+    .st-key-ctrl_row [data-testid="stSlider"]::before { content: "0"; left: 0; }
+    .st-key-ctrl_row [data-testid="stSlider"]::after  { content: "5"; right: 0; }
 
     /* ── Mobile (≤768px): stack columns, keep desktop untouched ── */
     @media (max-width: 768px) {
@@ -111,9 +138,16 @@ def _torch_load_cpu(f, *args, **kwargs):
     kwargs.setdefault('map_location', 'cpu')
     return _torch_load_orig(f, *args, **kwargs)
 torch.load = _torch_load_cpu
+# The GNN graphs are tiny (≤42 nodes); intra-op threading only adds contention
+# (measured on a loaded 8-core node: 8 threads → 6.2 s per _predict, 1 thread → 85 ms).
+torch.set_num_threads(int(os.environ.get("CF_TORCH_THREADS", "1")))
 import plotly.graph_objects as go
 
-from main      import BS_loc
+from main      import BS_loc, UE_loc, CSI
+MAP_H = 540   # map iframe height; +8 px frame = 3 bar charts (172 each) + 2 gaps
+from dyn_users import (R_MAX, SPEED_MIN, SPEED_MAX, DEFAULT_SPEED, speed_to_sigma,
+                       snap_indices, clamp_to_region, rebuild_loc_norm, grid_bounds,
+                       reassociate, ratchet_range)
 from generate  import cf_test, UE_test, loc_mean, loc_std
 from process   import (
     AP_num_test, UE_num_test, loc_test_norm,
@@ -148,21 +182,55 @@ def _load_models():
     rate_ckpt = f"model/rate_{stem}_15dB.pth"
     sm  = _load(SignalModel().to(dev), sig_ckpt)
     im  = _load(InterfModel().to(dev), int_ckpt)
-    rms = {
-        snr: _load(RateModel(signal_model_path=sig_ckpt,
-                             interf_model_path=int_ckpt,
-                             snr=snr).to(dev), rate_ckpt)
-        for snr in range(0, 31, 5)
-    }
+
+    # Lazy per-SNR RateModels: constructing all 7 up front cost ~7× the
+    # checkpoint loads (~12s) for models most sessions never touch. Build
+    # the default 15 dB head now; any other SNR is built on first access
+    # (dict.__missing__) and then cached in the dict.
+    class _LazyRateModels(dict):
+        def __missing__(self, snr):
+            m = _load(RateModel(signal_model_path=sig_ckpt,
+                                interf_model_path=int_ckpt,
+                                snr=snr).to(dev), rate_ckpt)
+            self[snr] = m
+            return m
+
+    rms = _LazyRateModels()
+    # Pre-build the default SNR. NOTE: assign the result — a bare `rms[15]`
+    # expression statement in app.py gets auto-rendered onto the page by
+    # Streamlit magic (it rewrites expression statements even inside
+    # functions of the main script).
+    _ = rms[15]
     return sm, im, rms, dev
 
 signal_model, interf_model, rate_models, _device = _load_models()
 
-# Stable references — never mutate cf_test globally
-_CSI_data    = cf_test.CSI       # (L, N_test, Nc, Nt, Nr)
-_BS_2d       = BS_loc[:, :2]     # (12, 2)
-_UE_test_2d  = UE_test[:, :2]   # (N_test, 2)
+# Stable references — never mutate cf_test globally.
+# Truth for a (possibly moved) UE is the CSI of the nearest of ALL 2500
+# ray-traced grid points (the 500 test points are a subset, so unmoved
+# samples are numerically unchanged). Transpose is a view, no copy.
+_CSI_all     = CSI.transpose(0, 1, 4, 3, 2)   # (L, 2500, Nc, Nt, Nr)
+_BS_2d       = BS_loc[:, :2]                  # (12, 2)
+_UE_all_2d   = np.ascontiguousarray(UE_loc[:, :2])   # (2500, 2)
+_GRID_LIST   = _UE_all_2d.tolist()            # sent to the map component
+_GRID_BOUNDS = grid_bounds(_UE_all_2d)
 _N_TEST      = len(AP_num_test)
+
+# ─── Interactive map component (drag + Brownian motion) ──────────────────────
+# Plotly.js is served from the component dir so the iframe never depends on a
+# CDN; the bundle is generated from the installed plotly package on first start.
+_COMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "components", "ue_map")
+_PLOTLY_JS = os.path.join(_COMP_DIR, "plotly.min.js")
+if not os.path.exists(_PLOTLY_JS):
+    from plotly.offline import get_plotlyjs
+    _tmp = _PLOTLY_JS + f".tmp{os.getpid()}"
+    with open(_tmp, "w", encoding="utf-8") as _f:
+        _f.write(get_plotlyjs())
+    os.replace(_tmp, _PLOTLY_JS)          # atomic: safe with concurrent sessions
+_ue_map = components.declare_component("ue_map", path=_COMP_DIR)
+MOTION_TICK_MS = 100    # client-side animation step
+MOTION_EMIT_MS = 300    # min interval between position reports to Python
 
 # ─── Colour palette ───────────────────────────────────────────────────────────
 BG    = "#1a1a2e"
@@ -198,7 +266,7 @@ def _renorm(A: np.ndarray, raw: np.ndarray) -> np.ndarray:
 
 def _recompute_true(ue_csi, ap_orig, A, P, snr_val):
     """Vectorised true SINR / rate computation (no global mutation)."""
-    L   = _CSI_data.shape[0]
+    L   = _CSI_all.shape[0]
     K   = ue_csi.shape[1]
     Nc  = ue_csi.shape[2]
 
@@ -307,13 +375,12 @@ def _load_sample(idx: int):
 
     ap_orig = np.array([
         np.argmin(np.sum((_BS_2d    - loc) ** 2, axis=1)) for loc in ap_loc])
-    ue_orig = np.array([
-        np.argmin(np.sum((_UE_test_2d - loc) ** 2, axis=1)) for loc in ue_loc])
+    ue_orig = snap_indices(ue_loc, _UE_all_2d)
 
     snr_val = ss.get("snr", 15)
 
     ss.ap_num  = ap_num;   ss.ue_num  = ue_num
-    ss.ap_loc  = ap_loc;   ss.ue_loc  = ue_loc
+    ss.ap_loc  = ap_loc;   ss.ue_loc  = ue_loc.copy()   # copy: moved in place later
     ss.A       = A;        ss.P       = P
     ss.raw_w   = P.copy()
     # Immutable original-allocation snapshot — dual-baseline report uses it to
@@ -321,14 +388,15 @@ def _load_sample(idx: int):
     # already-modified state (never mutated; reset reloads the whole sample).
     ss.A0      = A.copy(); ss.P0      = P.copy()
     ss.ap_orig = ap_orig
-    ss.ue_csi  = _CSI_data[:, ue_orig, :]   # (L, K, Nc, Nt, Nr)
     ss.loc_norm = loc_test_norm[idx]
+    _set_ue_csi(ss, ue_orig)
 
-    # Compute true β from CSI for DNN optimizer (avoids distance approximation)
-    h = ss.ue_csi[..., 0]                              # (L_full, K, Nc, Nt)
-    h_norms = np.linalg.norm(h, axis=-1)                # (L_full, K, Nc)
-    beta_full = np.mean(h_norms ** 2, axis=2)           # (L_full, K)
-    ss.beta = beta_full[ap_orig]                        # (ap_num, K)
+    # Dynamic-user state: positions are the dataset's until the user moves them.
+    # Motion keeps its current on/off state across sample loads (default on).
+    ss.ue_moved  = False
+    ss.motion_on = bool(ss.get("motion_on", True))
+    ss.bar_yranges = None                       # axes re-fit until the first move
+    ss.map_epoch = ss.get("map_epoch", 0) + 1   # tells the map to adopt these positions
 
     ss.true_signal = signal_test[idx, :ue_num].numpy()
     ss.true_interf = interf_test[idx, :ue_num].numpy()
@@ -345,6 +413,59 @@ def _load_sample(idx: int):
     ss.prev_pred_signal = None
     ss.prev_pred_interf = None
     ss.prev_pred_rate   = None
+
+
+def _set_ue_csi(ss, ue_orig):
+    """Bind each UE to the CSI of grid point ue_orig[k] (its nearest measured
+    point) and derive the true large-scale gain β for the optimizer."""
+    ss.ue_orig = np.asarray(ue_orig)
+    ss.ue_csi  = _CSI_all[:, ss.ue_orig, :]            # (L, K, Nc, Nt, Nr)
+    h = ss.ue_csi[..., 0]                              # (L_full, K, Nc, Nt)
+    h_norms = np.linalg.norm(h, axis=-1)                # (L_full, K, Nc)
+    beta_full = np.mean(h_norms ** 2, axis=2)           # (L_full, K)
+    ss.beta = beta_full[ss.ap_orig]                     # (ap_num, K)
+
+
+def _apply_positions(ss, positions, snapshot=False):
+    """Move UEs to `positions` (K,2 metres): clamp to the measured region,
+    rebuild the GNN input, re-snap truth to the nearest grid points and
+    recompute true + predicted metrics.  The association follows the
+    generator's rule (main.improved_random_selection: nearest-4 APs, ≤8 UEs
+    per AP): links to APs that are no longer among a UE's 4 nearest are handed
+    over, the edge count is preserved. Power of new links = weight 1.0.
+
+    snapshot=True keeps the before/after ghost bars (discrete agent moves);
+    motion ticks pass False so the bars don't flicker against stale ghosts."""
+    ue_loc = clamp_to_region(positions, _UE_all_2d, R_MAX)[:ss.ue_num]
+    ss.ue_loc   = ue_loc
+    A_new, added, removed = reassociate(ss.A, ss.ap_loc, ue_loc)
+    if added or removed:
+        for (l, k) in removed:
+            ss.raw_w[l, k] = 0.0
+        for (l, k) in added:
+            ss.raw_w[l, k] = 1.0
+        ss.A = A_new
+        ss.P = _renorm(ss.A, ss.raw_w)
+        ss.is_modified = True
+        ss.added_links   = set(added)      # latest handover shown in yellow
+        ss.removed_links = set(removed)
+        ss.changed_links = set(added) | set(removed)
+    ss.loc_norm = torch.from_numpy(rebuild_loc_norm(
+        loc_test_norm[ss.test_idx].numpy(), ss.ap_num, ss.ue_num,
+        ue_loc, loc_mean, loc_std))
+    _set_ue_csi(ss, snap_indices(ue_loc, _UE_all_2d))
+    ss.ue_moved = True
+    if snapshot:
+        _refresh(ss)
+        return
+    ss._delta_locked = False
+    for name in ("signal", "interf", "rate"):
+        setattr(ss, f"prev_true_{name}", None)
+        setattr(ss, f"prev_pred_{name}", None)
+    sig, intr, rate = _recompute_true(ss.ue_csi, ss.ap_orig, ss.A, ss.P, ss.snr)
+    ss.true_signal = sig;  ss.true_interf = intr;  ss.true_rate = rate
+    ps, pi, pr = _predict(ss.loc_norm, ss.ap_num, ss.ue_num, ss.A, ss.P, ss.snr)
+    ss.pred_signal = ps;  ss.pred_interf = pi;  ss.pred_rate = pr
 
 
 def _snapshot_before(ss):
@@ -688,6 +809,7 @@ def _run_grad_optimizer(optmode, gtype, snap, goal, pred_before, ss):
         ue_abs_floor=goal.get("ue_abs_floor"),
         bare_targets=goal.get("bare_targets") or [],
         secondary_weight_scale=goal.get("secondary_weight_scale", 1.0),
+        ue_freeze=goal.get("ue_freeze"),
         init_P=_init_P,
     )
 
@@ -810,6 +932,10 @@ def _optimize_and_report(instruction: str, goal: dict, zh: bool, ss):
 
         emit((f"⚙️ 第 {it+1} 轮:{_optmode} 优化中…" if zh
               else f"⚙️ Round {it+1}: optimizing ({_optmode})…"))
+        # Deterministic per-round seed: same instruction on the same scenario
+        # reproduces the same allocation (rounds still differ via the goal).
+        torch.manual_seed(1234 + it)
+        np.random.seed(1234 + it)
         result = _run_grad_optimizer(_optmode, _gtype, snap, cur_goal,
                                      pred_before, ss)
         total_elapsed += result["elapsed"]
@@ -833,31 +959,30 @@ def _optimize_and_report(instruction: str, goal: dict, zh: bool, ss):
                       f"❌ Digital-twin check: {_cl.format_failures(vr['failures'], zh)}"))
 
         cand = dict(A=A_cand, w=w_cand, vr=vr,
-                    is_gradient=result.get("is_gradient", False))
+                    is_gradient=result.get("is_gradient", False),
+                    goal=cur_goal)
         if best is None or _loop_better(vr, best["vr"]):
             best, best_it = cand, it
 
         if vr["satisfied"] or it == max_iters - 1:
             break
 
-        # Regenerate the loss knobs: LLM first, deterministic heuristic fallback.
+        # Regenerate the loss knobs — fully deterministic (no LLM round-trip:
+        # it cost seconds of wall-clock per retry and made runs irreproducible,
+        # while heuristic_reweight + the two feedback steps below cover every
+        # adjustment the revision prompt offered the LLM):
+        #   1. heuristic_reweight — per-failure knob escalation
+        #   2. calibrate_target_multipliers — re-aim each failed target
+        #      relative to what the optimiser actually DELIVERED (a fixed
+        #      bump is a no-op when the old aim sits far from reality)
+        #   3. freeze_met_targets — met-with-margin targets keep only their
+        #      floor so freed resources flow to the still-failing UEs
         emit(("🧠 重新生成损失函数…" if zh else "🧠 Regenerating loss function…"))
-        revised = None
-        _via = "heuristic"
-        try:
-            raw = _call_llm(_cl.build_revision_prompt(cur_goal, vr, zh))
-            if raw:
-                adj = _cl.parse_adjustments(raw)
-                if adj is not None:
-                    revised = _cl.apply_adjustments(cur_goal, adj, ue_n)
-                    _via = "LLM"
-        except Exception:
-            revised = None
-        if revised is None:
-            revised = _cl.heuristic_reweight(cur_goal, vr, ue_n)
-            _via = "heuristic"
-        emit((f"   → 已调整损失权重 ({'LLM' if _via=='LLM' else '启发式'})" if zh
-              else f"   → loss reweighted ({_via})"))
+        revised = _cl.heuristic_reweight(cur_goal, vr, ue_n)
+        revised = _cl.calibrate_target_multipliers(
+            revised, vr, pred_before, pred_after, ue_n)
+        revised = _cl.freeze_met_targets(revised, vr)
+        emit(("   → 已调整损失权重" if zh else "   → loss reweighted"))
         cur_goal = revised
 
     if use_loop and not best["vr"]["satisfied"]:
@@ -866,6 +991,68 @@ def _optimize_and_report(instruction: str, goal: dict, zh: bool, ss):
     elif use_loop:
         emit((f"📊 采用第 {best_it+1} 轮结果,生成报告" if zh
               else f"📊 Adopting round {best_it+1}, building report"))
+
+    # ── Final TRUE-rate verification → at most one escalated boost pass ──
+    # The GNN twin can systematically over-predict a UE's gain (all trained
+    # seeds agree, so no surrogate-side check can catch it). Per design the
+    # optimiser and the in-loop validation see ONLY the digital twin; the
+    # true rates are the FINAL verification. When that verification finds a
+    # target UE short, escalate that UE's INTERNAL aim (requested increase
+    # × 3, multiplier capped at 2.5 — e.g. +20% → aim +60%), freeze the
+    # targets that verification shows comfortably met, and re-run ONE more
+    # twin-driven pass. The new allocation is adopted only if the final
+    # verification scores it strictly better.
+    if use_loop:
+        _P_best = _renorm(best["A"], best["w"])
+        _, _, _true_best = _recompute_true(ss.ue_csi, ss.ap_orig,
+                                           best["A"], _P_best, snr)
+        vr_true = _cl.check_requirements(goal, rate_before, _true_best,
+                                         ue_n, tol=0.0)
+        _user_um = goal.get("ue_multipliers") or {}
+        if not vr_true["satisfied"] and any(
+                f["kind"] == "target" for f in vr_true["failures"]):
+            _fail_ues = [f["ue"] for f in vr_true["failures"]
+                         if f["kind"] == "target"]
+            emit((f"🔬 最终验证: UE{','.join(map(str, _fail_ues))} 未达标 → "
+                  f"内部目标加码,重试一轮" if zh else
+                  f"🔬 Final verification: UE{','.join(map(str, _fail_ues))} "
+                  f"short → escalating internal aim, one more pass"))
+            bg = copy.deepcopy(best["goal"])
+            _um_b = dict(bg.get("ue_multipliers") or {})
+            for f in vr_true["failures"]:
+                if f["kind"] != "target":
+                    continue
+                k = f["ue"]
+                mu = float(_user_um.get(k, 1.0))
+                _um_b[k] = min(max(_um_b.get(k, 1.0),
+                                   1.0 + 3.0 * (mu - 1.0)), 2.5)
+            bg["ue_multipliers"] = _um_b
+            bg = _cl.freeze_met_targets(bg, vr_true)
+
+            ss.is_modified = init_is_modified
+            ss.P           = init_P.copy()
+            snap["A"]      = snap_A0.copy()
+            torch.manual_seed(1234 + max_iters)
+            np.random.seed(1234 + max_iters)
+            result = _run_grad_optimizer(_optmode, _gtype, snap, bg,
+                                         pred_before, ss)
+            total_elapsed += result["elapsed"]
+            total_steps   += result["n_evals"]
+            A_b = result["A_best"]
+            w_b = result["w_best"]
+            P_b = _renorm(A_b, w_b)
+            _, _, _true_b = _recompute_true(ss.ue_csi, ss.ap_orig, A_b, P_b, snr)
+            vr_tb = _cl.check_requirements(goal, rate_before, _true_b,
+                                           ue_n, tol=0.0)
+            if _loop_better(vr_tb, vr_true):
+                best = dict(A=A_b, w=w_b, vr=vr_tb,
+                            is_gradient=result.get("is_gradient", False),
+                            goal=bg)
+                emit(("   → 加码轮更优,采用" if zh
+                      else "   → escalated pass is better — adopted"))
+            else:
+                emit(("   → 加码轮未更优,保留原结果" if zh
+                      else "   → escalated pass not better — keeping previous"))
 
     # Commit the best round to the session state and refresh once.
     snap["A"]      = snap_A0
@@ -1129,7 +1316,7 @@ def _net_fig(ss):
         margin=dict(l=45, r=10, t=35, b=40),
         clickmode="event+select",
         dragmode=False,
-        height=550,
+        height=MAP_H,
         title=dict(text="Cell-Free Network Topology",
                    font=dict(color="white", size=13), x=0.5, xanchor="center"),
         annotations=_annotations,
@@ -1148,7 +1335,7 @@ def _fit_yrange(true_v, pred_v):
 
 def _bar_fig(true_v, pred_v, ylabel, title, ue_num, sel, fit_range=False,
              highlights=None, orig_true=None, orig_pred=None,
-             inc_solid=True):
+             inc_solid=True, true_label="True", yrange=None):
     def _clean(arr):
         return [float(v) if np.isfinite(v) else None for v in arr]
 
@@ -1184,7 +1371,7 @@ def _bar_fig(true_v, pred_v, ylabel, title, ue_num, sel, fit_range=False,
                showlegend=False, offsetgroup="true"),
         go.Bar(x=x, y=pred_y, name="Predicted", marker_color=pc, opacity=0.9,
                showlegend=False, offsetgroup="pred"),
-        go.Scatter(x=[None], y=[None], mode="markers", name="True",
+        go.Scatter(x=[None], y=[None], mode="markers", name=true_label,
                    marker=dict(color=C_TRUE, size=10, symbol="square")),
         go.Scatter(x=[None], y=[None], mode="markers", name="Predicted",
                    marker=dict(color=C_PRED, size=10, symbol="square")),
@@ -1239,7 +1426,9 @@ def _bar_fig(true_v, pred_v, ylabel, title, ue_num, sel, fit_range=False,
 
     # Compute y-range considering both current and original values
     _yr_kwargs = {}
-    if fit_range:
+    if yrange is not None:
+        _yr_kwargs = {"range": [float(yrange[0]), float(yrange[1])]}
+    elif fit_range:
         if has_delta:
             all_v = np.concatenate([true_v, pred_v, orig_true, orig_pred])
             vmin = float(np.nanmin(all_v)); vmax = float(np.nanmax(all_v))
@@ -1275,6 +1464,13 @@ def _build_network_state(ss) -> str:
     best_k = int(_np.argmax(rates)); worst_k = int(_np.argmin(rates))
     lines = [
         f"Current network state (SNR={ss.snr} dB, {ss.ap_num} APs, {ss.ue_num} UEs):",
+        f"  [Mobility] motion={'on' if ss.get('motion_on') else 'off'}, "
+        f"walking speed={float(ss.get('motion_speed', DEFAULT_SPEED)):.1f} m/s; "
+        f"UEs may be moved anywhere within the ray-traced region "
+        f"x∈[{_GRID_BOUNDS[0]:.0f},{_GRID_BOUNDS[1]:.0f}] m, "
+        f"y∈[{_GRID_BOUNDS[2]:.0f},{_GRID_BOUNDS[3]:.0f}] m"
+        + ("; true values are taken at the nearest measured grid point"
+           if ss.get('ue_moved') else ""),
         f"  [Summary] avg rate={avg_r:.2f} bps/Hz, total rate={tot_r:.2f} bps/Hz, "
         f"best UE{best_k}({rates[best_k]:.2f}), worst UE{worst_k}({rates[worst_k]:.2f})",
     ]
@@ -1285,7 +1481,8 @@ def _build_network_state(ss) -> str:
         ti = float(ss.true_interf[k]); pi = float(ss.pred_interf[k])
         tr = float(ss.true_rate[k]);   pr = float(ss.pred_rate[k])
         lines.append(
-            f"  UE{k}: signal={ts:.1f}/{ps:.1f}dBW, interf={ti:.1f}/{pi:.1f}dBW, "
+            f"  UE{k}: pos=({float(ss.ue_loc[k, 0]):.1f},{float(ss.ue_loc[k, 1]):.1f})m, "
+            f"signal={ts:.1f}/{ps:.1f}dBW, interf={ti:.1f}/{pi:.1f}dBW, "
             f"rate={tr:.2f}/{pr:.2f}bps/Hz | APs={serving} weights={weights}"
         )
     return "\n".join(lines)
@@ -1509,7 +1706,77 @@ def _execute_agent_tool(name: str, inp: dict, ss):
         ss.changed_links = set(); ss.added_links = set(); ss.removed_links = set()
         return "✅ Reset to original topology", False
 
+    if name == "start_motion":
+        ss.motion_on = True
+        return "✅ Brownian motion started (all UEs)", False
+
+    if name == "stop_motion":
+        ss.motion_on = False
+        return "✅ Motion stopped", False
+
+    if name == "set_motion_speed":
+        try:
+            v = float(inp.get("speed_mps", inp.get("sigma_m", inp.get("sigma", inp.get("value")))))
+        except (TypeError, ValueError):
+            return "❌ Motion speed must be a number (m/s)", False
+        v = float(np.clip(v, SPEED_MIN, SPEED_MAX))
+        ss.motion_speed = v
+        return f"✅ Walking speed set to {v:.1f} m/s", False
+
+    if name == "move_ue":
+        try:
+            k = int(inp["ue_index"])
+            if "position" in inp and inp["position"] is not None:
+                x, y = float(inp["position"][0]), float(inp["position"][1])
+            else:
+                x, y = float(inp["x"]), float(inp["y"])
+        except (KeyError, TypeError, ValueError, IndexError):
+            return "❌ move_ue needs ue_index and x, y in metres", False
+        if not (0 <= k < ss.ue_num):
+            return f"❌ UE index {k} out of range (0–{ss.ue_num - 1})", False
+        _cmd_ues.append(k); ss._cmd_ues = _cmd_ues
+        target = clamp_to_region(np.array([[x, y]], dtype=np.float32), _UE_all_2d, R_MAX)[0]
+        clamped = float(np.hypot(target[0] - x, target[1] - y)) > 1e-3
+        new_loc = ss.ue_loc.copy()
+        new_loc[k] = target
+        ss.map_epoch += 1                  # map must adopt Python's positions
+        _apply_positions(ss, new_loc, snapshot=True)
+        ss.selected_ue = k
+        note = (f" (requested ({x:.1f},{y:.1f}) is outside the measured region; "
+                f"clamped to the nearest allowed point)" if clamped else "")
+        return (f"✅ Moved UE{k} to ({target[0]:.1f}, {target[1]:.1f}) m{note}", False)
+
     return f"❌ 未知工具：{name}", False
+
+
+def _parse_motion_instruction(text: str, ss):
+    """Regex fallback for the mobility verbs (LLM unavailable). Returns a list
+    of log lines, or None if the text is not a motion command."""
+    t = (text.lower()
+         .replace('，', ',').replace('。', '').replace('：', ':')
+         .replace('（', '(').replace('）', ')').replace(' ', ''))
+    m = re.search(r'(?:ue|用户|user)(\d+).{0,10}?(?:移动到|移到|移动至|挪到|moveto|move.{0,6}to)'
+                  r'.{0,8}?\(?(-?\d+\.?\d*)[,;](-?\d+\.?\d*)\)?', t)
+    if not m:
+        m = re.search(r'(?:move|移动|挪).{0,6}?(?:ue|用户|user)(\d+).{0,10}?'
+                      r'\(?(-?\d+\.?\d*)[,;](-?\d+\.?\d*)\)?', t)
+    if m:
+        msg, _ = _execute_agent_tool("move_ue", {
+            "ue_index": int(m.group(1)), "x": float(m.group(2)), "y": float(m.group(3))}, ss)
+        return [msg]
+    m = re.search(r'(?:步长|速度|speed|sigma|σ|step)[^\d]{0,8}(\d+\.?\d*)', t)
+    if m and re.search(r'(运动|移动|motion|moving|brownian|step|步长|sigma|σ)', t):
+        msg, _ = _execute_agent_tool("set_motion_speed", {"speed_mps": float(m.group(1))}, ss)
+        return [msg]
+    if re.search(r'(停止|暂停|停下|别动|stop|pause|halt|freeze)', t) and \
+       re.search(r'(运动|移动|动|motion|moving|move|users?|ues?|用户)', t):
+        msg, _ = _execute_agent_tool("stop_motion", {}, ss)
+        return [msg]
+    if re.search(r'(开始|启动|开启|动起来|start|begin|resume|enable)', t) and \
+       re.search(r'(运动|移动|动|motion|moving|move|brownian|随机游走|random)', t):
+        msg, _ = _execute_agent_tool("start_motion", {}, ss)
+        return [msg]
+    return None
 
 
 def _parse_instruction(text: str, ss):
@@ -1536,7 +1803,10 @@ def _parse_instruction(text: str, ss):
         val = int(m.group(1))
         if val in range(0, 31, 5):
             ss.snr = val
-            ss.true_rate = rate_test[val // 5, ss.test_idx, :ss.ue_num].numpy()
+            if ss.is_modified or ss.get("ue_moved"):
+                _refresh(ss)
+            else:
+                ss.true_rate = rate_test[val // 5, ss.test_idx, :ss.ue_num].numpy()
             logs.append(f"✅ SNR 设置为 {val} dB")
         else:
             logs.append(f"❌ SNR 必须是 0/5/10/15/20/25/30 dB 之一")
@@ -1825,6 +2095,10 @@ def _llm_parse_instruction(instruction: str, ss):
                     "connect_nearest_aps": lambda a: ("connect_nearest_aps", {"ue_index": a["ue_index"], "n": a["n"]}),
                     "set_power_weight":    lambda a: ("set_power_weight",    {"ap_index": a["ap_index"], "ue_index": a["ue_index"], "weight": a["weight"]}),
                     "reset":               lambda a: ("reset_to_original",   {}),
+                    "start_motion":        lambda a: ("start_motion",        {}),
+                    "stop_motion":         lambda a: ("stop_motion",         {}),
+                    "set_motion_speed":    lambda a: ("set_motion_speed",    {"speed_mps": a.get("speed_mps", a.get("sigma_m", a.get("sigma", a.get("value"))))}),
+                    "move_ue":             lambda a: ("move_ue",             {"ue_index": a["ue_index"], "x": a.get("x"), "y": a.get("y"), "position": a.get("position")}),
                 }
                 # Handle nav/SNR commands from LLM
                 for act in actions:
@@ -1845,7 +2119,10 @@ def _llm_parse_instruction(instruction: str, ss):
                         val = int(act.get("value", -1))
                         if val in range(0, 31, 5):
                             ss.snr = val
-                            ss.true_rate = rate_test[val // 5, ss.test_idx, :ss.ue_num].numpy()
+                            if ss.is_modified or ss.get("ue_moved"):
+                                _refresh(ss)
+                            else:
+                                ss.true_rate = rate_test[val // 5, ss.test_idx, :ss.ue_num].numpy()
                             logs.append(f"✅ SNR set to {val} dB")
                             needs_refresh = True
                         else:
@@ -1891,7 +2168,12 @@ def _llm_parse_instruction(instruction: str, ss):
                     msgs = list(msgs) + [ans_msg]
                 return msgs, needs_refresh
 
-    # ── Fallback: regex Q&A → regex commands → friendly default ──
+    # ── Fallback: motion commands → regex Q&A → optimizer → regex commands ──
+    motion_logs = _parse_motion_instruction(instruction, ss)
+    if motion_logs:
+        _add_to_chat_history(instruction, " | ".join(motion_logs), ss)
+        return motion_logs, False
+
     regex_ans = _regex_answer(instruction, ss)
     if regex_ans:
         _add_to_chat_history(instruction, regex_ans, ss)
@@ -1917,6 +2199,11 @@ def _llm_parse_instruction(instruction: str, ss):
 # ─── Initialise session state ─────────────────────────────────────────────────
 if "snr" not in st.session_state:
     st.session_state.snr = 15
+    st.session_state.motion_on    = True      # demo starts with UEs moving
+    st.session_state.motion_speed = DEFAULT_SPEED     # m/s
+    st.session_state.map_epoch    = 0
+    st.session_state.map_last_seq = -1
+    st.session_state.ue_moved     = False
     _load_sample(0)
 if "changed_links" not in st.session_state:
     st.session_state.changed_links = set()
@@ -2146,6 +2433,10 @@ with st.expander("🖱️ Mouse Controls"):
     st.markdown("""
 **Select a UE** &nbsp;→&nbsp; Click any green circle on the network graph. The circle turns gold when selected. Click again or click empty area to deselect.
 
+**Drag a UE** &nbsp;→&nbsp; Press on a green circle and drag it. The GNN prediction follows the exact new position; the *true* bars use the channel of the nearest ray-traced point (faint dots = measured region, ≤ 3 m away). UEs cannot leave that region.
+
+**Brownian motion** &nbsp;→&nbsp; UEs random-walk by default at the walking speed set by the slider (0–5 m/s); the **■ Stop / ▶ Start** button under the map pauses and resumes it; the bar charts update live on fixed axes. As UEs move, links are handed over by the dataset's rule (each UE served only by its 4 nearest APs, ≤ 8 UEs per AP; the latest handover is drawn in yellow). Prev / Next / Reset restore the dataset positions and links (motion keeps running).
+
 **Toggle AP connection** &nbsp;→&nbsp; Select a UE first, then click an AP (triangle) to connect or disconnect it. The last serving AP cannot be removed.
 
 **Adjust power** &nbsp;→&nbsp; Select a UE — power weight sliders for each serving AP appear at the bottom of the page.
@@ -2202,155 +2493,264 @@ if agent_run:
         st.rerun()
 
 # ─── Main layout ──────────────────────────────────────────────────────────────
-col_l, col_r = st.columns([1.6, 1.0])
+# The map component + bar charts live in one st.fragment: position reports
+# from the map (drag / Brownian ticks) rerun only this fragment, not the whole
+# script. Anything that changes state shown OUTSIDE the fragment (selection →
+# power sliders / AP metrics, sample change → chat history) must
+# st.rerun(scope="app").
 
-with col_l:
-    ev = st.plotly_chart(
-        _net_fig(ss), use_container_width=True,
-        key="net", on_select="rerun",
+def _map_args(ss) -> dict:
+    """Plain-JSON arguments for the ue_map component (no numpy leaks)."""
+    _links = lambda name: [list(map(int, t)) for t in getattr(ss, name, set())]
+    return dict(
+        epoch=int(ss.map_epoch),
+        positions=np.asarray(ss.ue_loc, dtype=float).tolist(),
+        ap_loc=np.asarray(ss.ap_loc, dtype=float).tolist(),
+        A=np.asarray(ss.A).astype(int).tolist(),
+        P=np.asarray(ss.P, dtype=float).tolist(),
+        grid=_GRID_LIST, r_max=float(R_MAX),
+        moving=bool(ss.motion_on),
+        sigma=speed_to_sigma(ss.motion_speed, MOTION_TICK_MS),
+        tick_ms=MOTION_TICK_MS, emit_ms=MOTION_EMIT_MS,
+        selected_ue=ss.selected_ue,
+        selected_ap=getattr(ss, "selected_ap", None),
+        added=_links("added_links"), removed=_links("removed_links"),
+        changed=_links("changed_links"),
+        fig=json.loads(_net_fig(ss).to_json()),
+        height=MAP_H,
     )
 
-    # Handle click events
-    pts = ev.selection.points if ev and ev.selection else []
-    if pts:
-        ss.changed_links = set(); ss.added_links = set(); ss.removed_links = set()
-        pt    = pts[0]
-        curve = pt["curve_number"]
-        pidx  = pt["point_number"]
 
-        if curve == UE_TRACE:
-            k = pidx
-            ss.selected_ap = None  # mutual exclusion: UE selection clears AP selection
-            ss.selected_ue = k if ss.selected_ue != k else None
-            st.rerun()
+def _handle_map_value(val, ss):
+    """Consume one report from the map component: positions first (no rerun
+    needed — the bars are drawn later in this same fragment run), then any
+    click event, which maps onto the pre-component click semantics."""
+    if not isinstance(val, dict):
+        return
+    seq = val.get("seq", -1)
+    if seq == ss.map_last_seq or val.get("epoch") != ss.map_epoch:
+        return                      # duplicate delivery or stale positions
+    ss.map_last_seq = seq
 
-        elif curve == AP_TRACE and ss.selected_ue is None:
+    positions = val.get("positions")
+    if positions is not None and len(positions) == ss.ue_num:
+        pos = np.asarray(positions, dtype=np.float32)
+        if not np.allclose(pos, ss.ue_loc, atol=1e-3):
+            _apply_positions(ss, pos)
+
+    ev = val.get("event")
+    if not ev:
+        return
+    ss.changed_links = set(); ss.added_links = set(); ss.removed_links = set()
+    typ, idx = ev.get("type"), ev.get("index")
+
+    if typ == "select_ue" and idx is not None and 0 <= int(idx) < ss.ue_num:
+        k = int(idx)
+        ss.selected_ap = None  # mutual exclusion: UE selection clears AP selection
+        ss.selected_ue = k if ss.selected_ue != k else None
+        st.rerun(scope="app")
+
+    elif typ == "click_ap" and idx is not None and 0 <= int(idx) < ss.ap_num:
+        l = int(idx)
+        if ss.selected_ue is None:
             # No UE selected → toggle AP inspection (show served UEs + power)
-            l = pidx
             ss.selected_ap = l if ss.selected_ap != l else None
-            st.rerun()
+            st.rerun(scope="app")
+        k = ss.selected_ue
+        # Guard: cannot disconnect last serving AP
+        if ss.A[l, k] > 0.5 and ss.A[:, k].sum() <= 1:
+            return
+        # Guard: can only connect to nearest MAX_AP_PER_UE APs
+        if ss.A[l, k] < 0.5 and l not in _nearest_aps(ss.ap_loc, ss.ue_loc, k):
+            return
+        was_connected = ss.A[l, k] > 0.5
+        ss.A[l, k]     = 1.0 - ss.A[l, k]
+        ss.raw_w[l, k] = 1.0 if ss.A[l, k] > 0.5 else 0.0
+        ss.P           = _renorm(ss.A, ss.raw_w)
+        ss.is_modified = True
+        cl = getattr(ss, "changed_links", set())
+        cl.add((l, k)); ss.changed_links = cl
+        if was_connected:
+            rl = getattr(ss, "removed_links", set())
+            rl.add((l, k)); ss.removed_links = rl
+        else:
+            al = getattr(ss, "added_links", set())
+            al.add((l, k)); ss.added_links = al
+        ss._delta_locked = False
+        _refresh(ss)
+        st.rerun(scope="app")
 
-        elif curve == AP_TRACE and ss.selected_ue is not None:
-            l, k = pidx, ss.selected_ue
-            # Guard: cannot disconnect last serving AP
-            if ss.A[l, k] > 0.5 and ss.A[:, k].sum() <= 1:
-                pass
-            # Guard: can only connect to nearest MAX_AP_PER_UE APs
-            elif ss.A[l, k] < 0.5 and l not in _nearest_aps(ss.ap_loc, ss.ue_loc, k):
-                pass
-            else:
-                was_connected = ss.A[l, k] > 0.5
-                ss.A[l, k]    = 1.0 - ss.A[l, k]
-                ss.raw_w[l, k] = 1.0 if ss.A[l, k] > 0.5 else 0.0
-                ss.P           = _renorm(ss.A, ss.raw_w)
-                ss.is_modified = True
-                cl = getattr(ss, "changed_links", set())
-                cl.add((l, k)); ss.changed_links = cl
-                if was_connected:
-                    rl = getattr(ss, "removed_links", set())
-                    rl.add((l, k)); ss.removed_links = rl
-                else:
-                    al = getattr(ss, "added_links", set())
-                    al.add((l, k)); ss.added_links = al
-                ss._delta_locked = False
-                _refresh(ss)
-                st.rerun()
+    elif typ == "deselect":
+        ss.selected_ue = None
+        ss.selected_ap = None
+        st.rerun(scope="app")
 
-with col_r:
-    _hl = getattr(ss, "opt_targets", [])
-    _prev_ts = getattr(ss, "prev_true_signal", None)
-    _prev_ps = getattr(ss, "prev_pred_signal", None)
-    _prev_ti = getattr(ss, "prev_true_interf", None)
-    _prev_pi = getattr(ss, "prev_pred_interf", None)
-    _prev_tr = getattr(ss, "prev_true_rate",   None)
-    _prev_pr = getattr(ss, "prev_pred_rate",   None)
-    st.plotly_chart(
-        _bar_fig(ss.true_signal, ss.pred_signal,
-                 "dBW", "Signal Power", ss.ue_num, ss.selected_ue,
-                 fit_range=True, highlights=_hl,
-                 orig_true=_prev_ts, orig_pred=_prev_ps, inc_solid=False),
-        use_container_width=True, key="b_sig",
-    )
-    st.plotly_chart(
-        _bar_fig(ss.true_interf, ss.pred_interf,
-                 "dBW", "Interference Power", ss.ue_num, ss.selected_ue,
-                 fit_range=True, highlights=_hl,
-                 orig_true=_prev_ti, orig_pred=_prev_pi, inc_solid=False),
-        use_container_width=True, key="b_int",
-    )
-    st.plotly_chart(
-        _bar_fig(ss.true_rate, ss.pred_rate,
-                 "bits/s/Hz", f"Achievable Rate  (SNR = {ss.snr} dB)",
-                 ss.ue_num, ss.selected_ue, highlights=_hl,
-                 orig_true=_prev_tr, orig_pred=_prev_pr, inc_solid=True),
-        use_container_width=True, key="b_rate",
-    )
 
 _snr_opts = list(range(0, 31, 5))
-_snr_idx  = _snr_opts.index(ss.snr) if ss.snr in _snr_opts else 3
 
-with col_l:
-    # ─── Controls (left column: Prev/Next/Reset + Power) ─────────────────────
-    if "optimizer_mode" not in ss:
-        ss.optimizer_mode = "Joint Optimize"
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("◀ Prev", use_container_width=True,
-                     disabled=ss.test_idx == 0):
-            _load_sample(ss.test_idx - 1)
-            st.rerun()
-    with c2:
-        if st.button("Next ▶", use_container_width=True,
-                     disabled=ss.test_idx >= _N_TEST - 1):
-            _load_sample(ss.test_idx + 1)
-            st.rerun()
-    with c3:
-        if st.button("Reset", use_container_width=True):
-            _load_sample(ss.test_idx)
-            st.rerun()
+def _frozen_yranges(ss):
+    """Stable bar-chart axes while UEs move: fixed on the first move from the
+    values at that moment (with margin), unchanged while the data stays inside
+    and widened only when it leaves (dyn_users.ratchet_range).  None when
+    not moving, so the charts keep their usual auto-fit."""
+    if not (ss.ue_moved or ss.motion_on):
+        return None
+    cur = ss.get("bar_yranges") or {}
+    out = {}
+    for name, lo_floor, pad_abs, pad_rel in (("signal", None, 3.0, 0.25),
+                                              ("interf", None, 3.0, 0.25),
+                                              ("rate",   0.0,  0.5, 0.40)):
+        vals = np.concatenate([np.asarray(getattr(ss, f"true_{name}"), float),
+                               np.asarray(getattr(ss, f"pred_{name}"), float)])
+        r = ratchet_range(cur.get(name), vals, pad_abs, pad_rel, lo_floor)
+        if r is not None:
+            out[name] = r
+    ss.bar_yranges = out
+    return out
 
-    st.caption(
-        f"Sample #{ss.test_idx}  |  APs: {ss.ap_num}  |  UEs: {ss.ue_num}  "
-        f"|  Connections: {int(ss.A.sum())}"
-    )
 
-with col_r:
-    # ─── SNR controls (right column, aligned with bar charts) ─────────────────
-    s1, s2, s3 = st.columns(3)
-    with s1:
-        if st.button("SNR −", use_container_width=True,
-                     disabled=_snr_idx == 0):
-            new_snr = _snr_opts[_snr_idx - 1]
+@st.fragment
+def _map_and_bars():
+    ss = st.session_state
+    col_l, col_r = st.columns([1.6, 1.0])
+
+    with col_l:
+        # The map goes into a placeholder created FIRST (so it sits on top,
+        # level with the bar charts), but is filled AFTER the motion controls
+        # below it have been read — a toggle/slider change is then applied
+        # before the component renders, with no rerun.
+        map_slot = st.container()
+
+        # ─── Control row (level with the SNR row on the right) ───────────
+        # One row: motion toggle | step-σ slider | Prev | Next | Reset.
+        # Widgets are bound by `value=` (no key): the returned value is the
+        # post-click state in the same run, and a Python-side change
+        # (agent command, sample load) re-instantiates them with the new
+        # default because the default is part of the widget identity.
+        # The keyed container gives the row a `st-key-ctrl_row` CSS class so
+        # the slider's min/max tick bar can be hidden (keeps the row as tall
+        # as a button; the value still shows above the thumb).
+        with st.container(key="ctrl_row"):
+            r1, r2, r3, r4, r5 = st.columns([0.95, 1.95, 0.9, 0.9, 0.9],
+                                            vertical_alignment="center")
+        with r1:
+            # Start/Stop toggle button for the Brownian motion (on by default).
+            # Read before the map renders, so the flip reaches the component
+            # in this same run without a rerun.
+            _running = bool(ss.motion_on)
+            if st.button("■ Stop" if _running else "▶ Start",
+                         use_container_width=True,
+                         help="Start / stop the UE random walk (inside the "
+                              "measured region); bars update live."):
+                ss.motion_on = not _running
+        with r2:
+            ss.motion_speed = float(st.slider(
+                "Walking speed (m/s)", SPEED_MIN, SPEED_MAX,
+                value=float(ss.motion_speed), step=0.1,
+                format="speed = %.1f m/s", label_visibility="collapsed",
+                help="Pedestrian speed of the random walk (0–5 m/s)"))
+
+        with map_slot:
+            val = _ue_map(**_map_args(ss), key="ue_map", default=None)
+        _handle_map_value(val, ss)
+
+        # ─── Sample controls (same row) ──────────────────────────────────
+        if "optimizer_mode" not in ss:
+            ss.optimizer_mode = "Joint Optimize"
+        with r3:
+            if st.button("◀ Prev", use_container_width=True,
+                         disabled=ss.test_idx == 0):
+                _load_sample(ss.test_idx - 1)
+                st.rerun(scope="app")
+        with r4:
+            if st.button("Next ▶", use_container_width=True,
+                         disabled=ss.test_idx >= _N_TEST - 1):
+                _load_sample(ss.test_idx + 1)
+                st.rerun(scope="app")
+        with r5:
+            if st.button("Reset", use_container_width=True):
+                _load_sample(ss.test_idx)
+                st.rerun(scope="app")
+
+        _truth_note = (
+            f"  |  True = nearest ray-traced point (≤ {R_MAX:g} m); "
+            f"prediction uses exact positions"
+            if (ss.ue_moved or ss.motion_on) else ""
+        )
+        st.caption(
+            f"Sample #{ss.test_idx}  |  APs: {ss.ap_num}  |  UEs: {ss.ue_num}  "
+            f"|  Connections: {int(ss.A.sum())}{_truth_note}"
+        )
+
+    with col_r:
+        _hl = getattr(ss, "opt_targets", [])
+        _prev_ts = getattr(ss, "prev_true_signal", None)
+        _prev_ps = getattr(ss, "prev_pred_signal", None)
+        _prev_ti = getattr(ss, "prev_true_interf", None)
+        _prev_pi = getattr(ss, "prev_pred_interf", None)
+        _prev_tr = getattr(ss, "prev_true_rate",   None)
+        _prev_pr = getattr(ss, "prev_pred_rate",   None)
+        _tl = "True"   # truth = nearest ray-traced point while moving (see caption)
+        _yr = _frozen_yranges(ss) or {}
+        st.plotly_chart(
+            _bar_fig(ss.true_signal, ss.pred_signal,
+                     "dBW", "Signal Power", ss.ue_num, ss.selected_ue,
+                     fit_range=True, highlights=_hl,
+                     orig_true=_prev_ts, orig_pred=_prev_ps, inc_solid=False,
+                     true_label=_tl, yrange=_yr.get("signal")),
+            use_container_width=True, key="b_sig",
+        )
+        st.plotly_chart(
+            _bar_fig(ss.true_interf, ss.pred_interf,
+                     "dBW", "Interference Power", ss.ue_num, ss.selected_ue,
+                     fit_range=True, highlights=_hl,
+                     orig_true=_prev_ti, orig_pred=_prev_pi, inc_solid=False,
+                     true_label=_tl, yrange=_yr.get("interf")),
+            use_container_width=True, key="b_int",
+        )
+        st.plotly_chart(
+            _bar_fig(ss.true_rate, ss.pred_rate,
+                     "bits/s/Hz", f"Achievable Rate  (SNR = {ss.snr} dB)",
+                     ss.ue_num, ss.selected_ue, highlights=_hl,
+                     orig_true=_prev_tr, orig_pred=_prev_pr, inc_solid=True,
+                     true_label=_tl, yrange=_yr.get("rate")),
+            use_container_width=True, key="b_rate",
+        )
+
+        # ─── SNR controls (right column, aligned with bar charts) ────────
+        _snr_idx = _snr_opts.index(ss.snr) if ss.snr in _snr_opts else 3
+
+        def _set_snr(new_snr):
             ss.snr = new_snr
             ss._delta_locked = False
-            if ss.is_modified:
+            if ss.is_modified or ss.get("ue_moved"):
                 _refresh(ss)
             else:
                 _snapshot_before(ss)
                 ss.true_rate = rate_test[new_snr // 5, ss.test_idx, :ss.ue_num].numpy()
                 ps, pi, pr = _predict(ss.loc_norm, ss.ap_num, ss.ue_num, ss.A, ss.P, new_snr)
                 ss.pred_signal = ps; ss.pred_interf = pi; ss.pred_rate = pr
-            st.rerun()
-    with s2:
-        st.markdown(
-            f"<div style='text-align:center;padding:6px 0;font-weight:600'>"
-            f"SNR {ss.snr} dB</div>",
-            unsafe_allow_html=True)
-    with s3:
-        if st.button("SNR +", use_container_width=True,
-                     disabled=_snr_idx >= len(_snr_opts) - 1):
-            new_snr = _snr_opts[_snr_idx + 1]
-            ss.snr = new_snr
-            ss._delta_locked = False
-            if ss.is_modified:
-                _refresh(ss)
-            else:
-                _snapshot_before(ss)
-                ss.true_rate = rate_test[new_snr // 5, ss.test_idx, :ss.ue_num].numpy()
-                ps, pi, pr = _predict(ss.loc_norm, ss.ap_num, ss.ue_num, ss.A, ss.P, new_snr)
-                ss.pred_signal = ps; ss.pred_interf = pi; ss.pred_rate = pr
-            st.rerun()
+            st.rerun(scope="app")
+
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            if st.button("SNR −", use_container_width=True,
+                         disabled=_snr_idx == 0):
+                _set_snr(_snr_opts[_snr_idx - 1])
+        with s2:
+            st.markdown(
+                f"<div style='text-align:center;padding:6px 0;font-weight:600'>"
+                f"SNR {ss.snr} dB</div>",
+                unsafe_allow_html=True)
+        with s3:
+            if st.button("SNR +", use_container_width=True,
+                         disabled=_snr_idx >= len(_snr_opts) - 1):
+                _set_snr(_snr_opts[_snr_idx + 1])
+
+
+_map_and_bars()
+
 
 # ─── Power sliders (full width, shown when a UE is selected) ─────────────────
 if ss.selected_ue is not None:

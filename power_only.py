@@ -45,7 +45,7 @@ def power_optimize(rate_model, loc_norm, ap_num, ue_num, A_np, snr,
                    ue_multipliers=None, ue_abs_floor=None,
                    bare_targets=None,
                    init_P=None, geom_cache=None, valid_mask_in=None,
-                   secondary_weight_scale=1.0):
+                   secondary_weight_scale=1.0, ue_freeze=None):
     """Power-only optimisation via surrogate gradient through RateModel.
 
     Keeps topology A fixed and optimises power weights w_logits through
@@ -206,6 +206,14 @@ def power_optimize(rate_model, loc_norm, ap_num, ue_num, A_np, snr,
             if 0 <= k < ue_num:
                 _bare_mask_t[k] = True
 
+    # freeze_mask: closed-loop retry knob (see joint_optimize._compute_loss).
+    _freeze_mask_t = None
+    if has_targets and ue_freeze:
+        _freeze_mask_t = torch.zeros(ue_num, dtype=torch.bool, device=device)
+        for k in ue_freeze:
+            if 0 <= k < ue_num:
+                _freeze_mask_t[k] = True
+
     loss_kw = dict(
         target_mask=target_mask if has_targets else None,
         protect_mask=protect_mask if has_targets else None,
@@ -219,6 +227,7 @@ def power_optimize(rate_model, loc_norm, ap_num, ue_num, A_np, snr,
         primary_mask=_primary_mask_t,
         bare_mask=_bare_mask_t,
         secondary_weight_scale=secondary_weight_scale,
+        freeze_mask=_freeze_mask_t,
     )
 
     # ── Optimisation loop ─────────────────────────────────────────────

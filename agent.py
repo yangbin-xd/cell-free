@@ -35,6 +35,9 @@ _WHITE_PATTERNS = [
 ]
 _BLACK_PATTERNS = [
     r'(解释|说明|介绍|explain|describe|tell\s+me\s+about|what\s+is)',
+    # mobility commands are never optimisation requests ("move UE3 to x=620"
+    # would otherwise match the `x\b` white pattern)
+    r'(移动|运动|挪到|动起来|停止运动|\bmove\b|\bmotion\b|\bmoving\b|brownian)',
     r'^(什么|如何|怎么|how\s+to|what\s+is|tell\s+me)',
     r'(rate|速率).{0,6}(是多少|是什么|how\s+much|what\s+is)',
 ]
@@ -92,7 +95,7 @@ def build_unified_prompt(text: str, network_state: str, chat_history: str = "") 
         '{"action": "query", "response": "concise answer in 1-2 sentences using the network data above"}\n\n'
         '3. GREETING or CASUAL CHAT (hello, 你好, good morning, chitchat):\n'
         '{"action": "chat", "response": "friendly short reply, briefly mention what you can do"}\n\n'
-        '4. COMMAND (select UE, change connections, adjust power, reset, next/prev topology, set SNR):\n'
+        '4. COMMAND (select UE, change connections, adjust power, reset, next/prev topology, set SNR, move a UE, start/stop user motion):\n'
         '{"action": "command", "actions": [...]}\n'
         "Available commands:\n"
         '  {"action":"select_ue","ue_index":N}\n'
@@ -102,7 +105,13 @@ def build_unified_prompt(text: str, network_state: str, chat_history: str = "") 
         '  {"action":"reset"}\n'
         '  {"action":"next_topology"}\n'
         '  {"action":"prev_topology"}\n'
-        '  {"action":"set_snr","value":N}   (N: 0/5/10/15/20/25/30)\n\n'
+        '  {"action":"set_snr","value":N}   (N: 0/5/10/15/20/25/30)\n'
+        '  {"action":"move_ue","ue_index":N,"x":X,"y":Y}   (metres; must lie in the ray-traced region given in the network state)\n'
+        '  {"action":"start_motion"}   (all UEs start a Brownian random walk)\n'
+        '  {"action":"stop_motion"}\n'
+        '  {"action":"set_motion_speed","speed_mps":V}   (V: 0-5 m/s walking speed)\n'
+        '  e.g. "让用户3移动到 (620, 260)" → [{"action":"move_ue","ue_index":3,"x":620,"y":260}]\n'
+        '  e.g. "start moving users" → [{"action":"start_motion"}];  "stop" / "停止运动" → [{"action":"stop_motion"}]\n\n'
         "== OPTIMIZATION RULES ==\n"
         '- "AP9的用户" or "users served by AP9" → look up AP9\'s served UEs from the network state\n'
         '- Two-level protection: protected_ues use protected_floor, remaining non-target UEs use constraint_floor\n'

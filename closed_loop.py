@@ -21,7 +21,7 @@ import re
 import numpy as np
 
 # Loop budget / tolerance. Kept as module constants (no UI knob by design).
-MAX_ITERS = 2         # 1 initial pass + at most 1 LLM-reweighted retry
+MAX_ITERS = 3         # 1 initial pass + at most 2 reweighted retries
 TOL = 0.02            # a requirement counts as met at >= required * (1 - TOL)
 
 
@@ -46,8 +46,12 @@ def has_hard_requirement(goal: dict) -> bool:
 
 
 # ─── Validation ───────────────────────────────────────────────────────────
-def check_requirements(goal: dict, pred_before, pred_after, ue_num: int) -> dict:
+def check_requirements(goal: dict, pred_before, pred_after, ue_num: int,
+                       tol: float = TOL) -> dict:
     """Check ``pred_after`` (GNN digital twin) against ``goal``'s requirements.
+
+    ``tol`` is the met/not-met slack (default ``TOL``): a requirement counts
+    as met at ``achieved >= required * (1 - tol)``.
 
     Returns ``{satisfied, score, total_gap, failures, n_req}`` where:
       - ``failures`` is a list of ``{ue, kind, required, achieved, gap_pct}``
@@ -98,11 +102,16 @@ def check_requirements(goal: dict, pred_before, pred_after, ue_num: int) -> dict
                          float(aft[k])))
 
     failures = []
+    met_targets = []
     met = 0
     total_gap = 0.0
     for ue, kind, required, achieved in reqs:
-        if achieved >= required * (1.0 - TOL):
+        if achieved >= required * (1.0 - tol):
             met += 1
+            if kind == "target":
+                met_targets.append({
+                    "ue": ue, "required": required, "achieved": achieved,
+                })
         else:
             gap = required - achieved
             gap_pct = gap / (required + 1e-9) * 100.0
@@ -120,6 +129,7 @@ def check_requirements(goal: dict, pred_before, pred_after, ue_num: int) -> dict
         "score": score,
         "total_gap": total_gap,
         "failures": failures,
+        "met_targets": met_targets,
         "n_req": n_req,
     }
 
@@ -307,6 +317,70 @@ def apply_adjustments(goal: dict, adj: dict, ue_num: int) -> dict:
                 prot.add(ki)
         g["protected_ues"] = sorted(prot)
 
+    return g
+
+
+# ─── Surrogate-frame target calibration ───────────────────────────────────
+def calibrate_target_multipliers(goal: dict, vr: dict,
+                                 pred_before, pred_after,
+                                 ue_num: int) -> dict:
+    """Re-aim failed targets relative to what the optimiser DELIVERED.
+
+    The optimiser aims at ``pred_before[k] * m``; a retry only changes its
+    gradient if the new aim moves relative to the rate it actually delivered
+    last round (``pred_after[k]``). Proportional feedback in the surrogate's
+    frame:
+
+        m'[k] = (pred_after[k] / pred_before[k]) * (required / achieved)
+
+    (× a small 1.05 headroom, floored at the current multiplier, capped at
+    10). With the loop validating in the same surrogate space this lands the
+    new aim at ``required × 1.05`` exactly, independent of how far the old
+    multiplier was from reality. Applied only to failed ``target``-kind
+    requirements. Returns an adjusted deep copy of ``goal``.
+    """
+    g = copy.deepcopy(goal)
+    if pred_before is None or pred_after is None:
+        return g
+    pb = np.asarray(pred_before, dtype=np.float64)[:ue_num]
+    pa = np.asarray(pred_after, dtype=np.float64)[:ue_num]
+    um = dict(g.get("ue_multipliers") or {})
+    for f in vr.get("failures", []):
+        if f["kind"] != "target":
+            continue
+        ue = int(f["ue"])
+        if not (0 <= ue < ue_num) or pb[ue] <= 1e-6:
+            continue
+        ratio = f["required"] / max(f["achieved"], 1e-6)
+        ratio = min(ratio, 3.0)                      # cap the over-correction
+        m_new = (pa[ue] / pb[ue]) * ratio * 1.05     # small headroom
+        cur = float(um.get(ue, 1.0))
+        um[ue] = float(min(max(m_new, cur), 10.0))
+    g["ue_multipliers"] = um
+    return g
+
+
+# ─── Retry-round focus: freeze targets already met with margin ────────────
+def freeze_met_targets(goal: dict, vr: dict, margin: float = 1.10) -> dict:
+    """Freeze target UEs that met their requirement with margin — retry
+    rounds then keep only their floor protection and drop the residual
+    upward pull, so the freed power/topology goes to the UEs still short.
+
+    Without this, a retry re-runs the SAME tug-of-war: satisfied UEs (often
+    with tiny baselines and hence huge 1/baseline-scaled gradients) keep
+    absorbing resources toward their stretched aim while the one failing UE
+    stays starved. A UE that later drops below its requirement is unfrozen
+    again. Returns an adjusted deep copy of ``goal``.
+    """
+    g = copy.deepcopy(goal)
+    frozen = set(g.get("ue_freeze") or [])
+    for mt in vr.get("met_targets", []):
+        if mt["achieved"] >= mt["required"] * margin:
+            frozen.add(int(mt["ue"]))
+    for f in vr.get("failures", []):
+        if f["kind"] == "target":
+            frozen.discard(int(f["ue"]))
+    g["ue_freeze"] = sorted(frozen)
     return g
 
 

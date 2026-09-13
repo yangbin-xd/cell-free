@@ -2216,6 +2216,20 @@ if "removed_links" not in st.session_state:
 
 ss = st.session_state
 
+# ─── Fixed page skeleton ──────────────────────────────────────────────────────
+# A fragment's id is the md5 of its function name + the delta path of the
+# container it is called in.  With the header and chat emitted at top level,
+# every extra chat message above the map shifted that path, so a full rerun
+# changed the fragment id while the (moving) map component kept reporting
+# positions under the old id → "RuntimeError: Could not find fragment with
+# id …".  Creating the containers first pins the fragment's path, and thus its
+# id, for the life of the session.  `_page_top` is entered here and left just
+# before the map so the code in between needs no re-indentation (the dg stack
+# is reset on every script run, so an st.rerun/st.stop in between is safe).
+_page_top = st.container()     # title, chat, help expander
+_page_map = st.container()     # map + bar charts fragment
+_page_top.__enter__()
+
 # ─── Title ────────────────────────────────────────────────────────────────────
 import pathlib as _pl
 import re as _re
@@ -2751,7 +2765,9 @@ def _map_and_bars():
                 _set_snr(_snr_opts[_snr_idx + 1])
 
 
-_map_and_bars()
+_page_top.__exit__(None, None, None)
+with _page_map:
+    _map_and_bars()
 
 
 # ─── Power sliders (full width, shown when a UE is selected) ─────────────────

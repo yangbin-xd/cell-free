@@ -148,7 +148,14 @@
   function redraw() {
     if (!fig) return;
     Plotly.react(gd, buildData(), buildLayout(), { displayModeBar: false, responsive: true });
-    if (!plotted) { plotted = true; send("streamlit:setFrameHeight", { height: height + 8 }); }
+    if (!plotted) {
+      plotted = true;
+      // index.html shows a "Loading map…" overlay inside #gd; Plotly.react
+      // leaves foreign children alone, so drop it once the first figure is up.
+      const loading = document.getElementById("loading");
+      if (loading) loading.remove();
+      send("streamlit:setFrameHeight", { height: height + 8 });
+    }
   }
 
   // ── emit to Python ───────────────────────────────────────────────────────

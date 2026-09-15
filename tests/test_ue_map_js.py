@@ -19,7 +19,8 @@ var window = {
   parent: { postMessage: function (m) { __posted.push(m); } },
   addEventListener: function (type, fn) { if (type === "message") window.__onmessage = fn; },
 };
-var document = { getElementById: function () { return gd; } };
+var __loading = { removed: false, remove: function () { this.removed = true; } };
+var document = { getElementById: function (id) { return id === "loading" ? __loading : gd; } };
 var gd = {
   _fullLayout: null,
   addEventListener: function () {},
@@ -110,6 +111,15 @@ class UeMapJsTests(unittest.TestCase):
         self.assertFalse(reacts[0]["layout"]["xaxis"]["autorange"])
         # height reported once
         self.assertTrue(any(m["type"] == "streamlit:setFrameHeight" for m in self.posted()))
+
+    def test_first_render_removes_loading_overlay(self):
+        # index.html shows "Loading map…" in an absolutely-positioned overlay
+        # inside #gd; Plotly.react keeps foreign children, so ue_map.js must
+        # remove it once the first figure is drawn (radiomap.online showed the
+        # text on top of the map forever, 2026-09-15).
+        self.assertFalse(self.ctx.eval("__loading.removed"))
+        self.render(_args())
+        self.assertTrue(self.ctx.eval("__loading.removed"))
 
     def test_same_epoch_keeps_local_positions(self):
         self.render(_args())

@@ -1486,6 +1486,9 @@ def _build_network_state(ss) -> str:
            if ss.get('ue_moved') else ""),
         f"  [Summary] avg rate={avg_r:.2f} bps/Hz, total rate={tot_r:.2f} bps/Hz, "
         f"best UE{best_k}({rates[best_k]:.2f}), worst UE{worst_k}({rates[worst_k]:.2f})",
+        "  [APs] " + ", ".join(
+            f"AP{l}=({float(ss.ap_loc[l, 0]):.1f},{float(ss.ap_loc[l, 1]):.1f})m"
+            for l in range(ss.ap_num)),
     ]
     for k in range(ss.ue_num):
         serving = [l for l in range(ss.ap_num) if ss.A[l, k] > 0.5]

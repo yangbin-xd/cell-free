@@ -112,6 +112,17 @@ def build_unified_prompt(text: str, network_state: str, chat_history: str = "") 
         '  {"action":"set_motion_speed","speed_mps":V}   (V: 0-5 m/s walking speed)\n'
         '  e.g. "让用户3移动到 (620, 260)" → [{"action":"move_ue","ue_index":3,"x":620,"y":260}]\n'
         '  e.g. "start moving users" → [{"action":"start_motion"}];  "stop" / "停止运动" → [{"action":"stop_motion"}]\n\n'
+        "== QUERY RULES ==\n"
+        '- A UE\'s actual signal/interference/rate (the numbers in the network state) are produced ONLY '
+        'by its CURRENT serving APs (the "APs=[...]" list for that UE). If the question asks about '
+        'distance or signal to an AP that is NOT in that UE\'s APs list, any path-loss number you give is '
+        'HYPOTHETICAL (as if that AP alone served the UE) — say so explicitly, e.g. "this AP does not '
+        'currently serve UEk, so this is a hypothetical estimate".\n'
+        '- NEVER claim the UE\'s actual/real signal strength "stays unchanged" just because the AP in the '
+        'question is not a serving AP. Moving a UE changes its distance to its REAL serving APs too, so '
+        'its true signal strength generally DOES change. If you cannot compute that change from the data '
+        'given (it needs the model re-run at the new position), say that explicitly instead of implying '
+        'nothing changes.\n\n'
         "== OPTIMIZATION RULES ==\n"
         '- "AP9的用户" or "users served by AP9" → look up AP9\'s served UEs from the network state\n'
         '- Two-level protection: protected_ues use protected_floor, remaining non-target UEs use constraint_floor\n'

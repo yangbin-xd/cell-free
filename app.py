@@ -315,6 +315,17 @@ def _recompute_true(ue_csi, ap_orig, A, P, snr_val):
     return sig_db, int_db, rate
 
 
+def _sinr_db(signal_db, interf_db, snr_val):
+    """Per-UE SINR (dB) reconstructed from the stored signal/interference dBW
+    arrays, using the same noise-floor convention as _recompute_true:
+    noise_dB = -87 - snr. Lets the regex Q&A fallback answer "SINR" queries
+    without an LLM round-trip (signal/interf are already in ss)."""
+    sig_lin = 10 ** (np.asarray(signal_db, dtype=np.float64) / 10)
+    int_lin = 10 ** (np.asarray(interf_db, dtype=np.float64) / 10)
+    noise_lin = 10 ** ((-87 - snr_val) / 10)
+    return 10 * np.log10(sig_lin / (int_lin + noise_lin) + 1e-300)
+
+
 def _predict(loc_norm, ap_num, ue_num, A, P, snr_val):
     """GNN inference → (pred_signal, pred_interf, pred_rate)."""
     A_t = torch.zeros(12, 30, dtype=torch.int32,    device=_device)
@@ -1540,9 +1551,13 @@ def _regex_answer(text, ss):
     # "当前…速率" and would otherwise swallow the query with just avg/best/worst.
     _metric = all_ue_metric_query(text)
     if _metric:
-        _tv, _pv = {"rate":   (ss.true_rate,   ss.pred_rate),
-                    "interf": (ss.true_interf, ss.pred_interf),
-                    "signal": (ss.true_signal, ss.pred_signal)}[_metric]
+        if _metric == "sinr":
+            _tv = _sinr_db(ss.true_signal, ss.true_interf, ss.snr)
+            _pv = _sinr_db(ss.pred_signal, ss.pred_interf, ss.snr)
+        else:
+            _tv, _pv = {"rate":   (ss.true_rate,   ss.pred_rate),
+                        "interf": (ss.true_interf, ss.pred_interf),
+                        "signal": (ss.true_signal, ss.pred_signal)}[_metric]
         return format_all_ue_metric(_tv, _pv, ss.ue_num, zh, metric=_metric)
 
     # Network-wide spectral efficiency / throughput / rate
@@ -1596,6 +1611,12 @@ def _regex_answer(text, ss):
                             f"预测：{ss.pred_interf[k]:.1f} dBW。")
                 return (f"UE{k} — true interference: {ss.true_interf[k]:.1f} dBW, "
                         f"predicted: {ss.pred_interf[k]:.1f} dBW.")
+            if re.search(r'信噪干扰比|信干噪比|sinr', t):
+                _t_sinr = _sinr_db(ss.true_signal[k:k+1], ss.true_interf[k:k+1], ss.snr)[0]
+                _p_sinr = _sinr_db(ss.pred_signal[k:k+1], ss.pred_interf[k:k+1], ss.snr)[0]
+                if zh:
+                    return f"UE{k} — 真实 SINR：{_t_sinr:.2f} dB，预测：{_p_sinr:.2f} dB。"
+                return f"UE{k} — true SINR: {_t_sinr:.2f} dB, predicted: {_p_sinr:.2f} dB."
             if re.search(r'(how\s*many|几个|多少).{0,10}(ap|基站)|(ap|基站).{0,10}(how\s*many|几个|多少)', t):
                 aps = [l for l in range(ss.ap_num) if ss.A[l, k] > 0.5]
                 if zh:
@@ -1950,14 +1971,22 @@ def _call_llm(prompt: str):
                       # ~3k tokens and reasoning alone can run 300-560 tokens,
                       # so 512 intermittently truncates the JSON (finish=length,
                       # empty content) → regex fallback → wrong "max_sum_rate".
-                      # 2048 leaves ample headroom; the model stops early anyway.
-                      "max_tokens": 2048,
+                      # 4096 leaves headroom even for "list every UE's <metric>"
+                      # answers (~29 rows), which need far more completion
+                      # tokens than routing/short-answer replies.
+                      "max_tokens": 4096,
                       "stream": False},
                 timeout=30,
             )
             r.raise_for_status()
-            return _ok("DeepSeek · deepseek-v4-flash (Tencent TokenHub)",
-                       r.json()["choices"][0]["message"]["content"].strip())
+            _content = r.json()["choices"][0]["message"]["content"].strip()
+            if _content:
+                return _ok("DeepSeek · deepseek-v4-flash (Tencent TokenHub)", _content)
+            # 200 OK but empty content (reasoning ate the whole budget) is a
+            # real failure, not success — must NOT short-circuit the cascade
+            # via _ok(), or the next backend never gets a chance and the
+            # error banner is silently cleared.
+            _accumulated_err = "DeepSeek: empty content (reasoning exhausted max_tokens)"
         except _req.HTTPError:
             _accumulated_err = f"DeepSeek HTTP {r.status_code}: {r.text[:200]}"
         except Exception as e:
@@ -1973,12 +2002,14 @@ def _call_llm(prompt: str):
                          "Content-Type": "application/json"},
                 json={"model": "llama-3.3-70b-versatile",
                       "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 512},
+                      "max_tokens": 1024},
                 timeout=30,
             )
             r.raise_for_status()
-            return _ok("Groq · llama-3.3-70b-versatile",
-                       r.json()["choices"][0]["message"]["content"].strip())
+            _content = r.json()["choices"][0]["message"]["content"].strip()
+            if _content:
+                return _ok("Groq · llama-3.3-70b-versatile", _content)
+            _accumulated_err = "Groq: empty content"
         except _req.HTTPError:
             _accumulated_err = f"Groq HTTP {r.status_code}: {r.text[:200]}"
         except Exception as e:
@@ -1994,13 +2025,15 @@ def _call_llm(prompt: str):
                          "anthropic-version": "2023-06-01",
                          "content-type": "application/json"},
                 json={"model": "claude-haiku-4-5",
-                      "max_tokens": 512,
+                      "max_tokens": 1024,
                       "messages": [{"role": "user", "content": prompt}]},
                 timeout=30,
             )
             r.raise_for_status()
-            return _ok("Anthropic · claude-haiku-4-5",
-                       r.json()["content"][0]["text"].strip())
+            _content = r.json()["content"][0]["text"].strip()
+            if _content:
+                return _ok("Anthropic · claude-haiku-4-5", _content)
+            _accumulated_err = "Anthropic: empty content"
         except _req.HTTPError:
             _accumulated_err = f"Anthropic HTTP {r.status_code}: {r.text[:200]}"
         except Exception as e:

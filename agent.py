@@ -211,13 +211,15 @@ def parse_unified_response(raw: str, ue_num: int, raw_text: str = "") -> dict:
 
 _ALL_UE_METRICS = {
     # metric → (keyword pattern, unit, zh label, en label, worst = argmax?)
-    # 干扰越大越差(worst=max);速率/信号越小越差(worst=min)
+    # 干扰越大越差(worst=max);速率/信号/SINR越小越差(worst=min)
     "rate":   (r'(?:速率|rate|频谱效率|吞吐|throughput)', "bits/s/Hz",
                "速率", "rates", False),
     "interf": (r'(?:干扰|interference|interf)', "dBW",
                "干扰", "interference", True),
     "signal": (r'(?:信号(?:功率|强度)?|signal(?:power|strength)?)', "dBW",
                "信号", "signal power", False),
+    "sinr":   (r'(?:信噪干扰比|信干噪比|sinr)', "dB",
+               "SINR", "SINR", False),
 }
 
 
@@ -259,7 +261,7 @@ def format_all_ue_metric(true_vals, pred_vals, ue_num: int, zh: bool = True,
     unsafe_allow_html=True).
     """
     _kw, unit, lbl_zh, lbl_en, worst_is_max = _ALL_UE_METRICS[metric]
-    fmt = "{:.2f}" if metric == "rate" else "{:.1f}"
+    fmt = "{:.2f}" if metric in ("rate", "sinr") else "{:.1f}"
     lbl_true, lbl_pred = ("真实", "预测") if zh else ("True", "Pred")
     vals_t = [float(true_vals[k]) for k in range(ue_num)]
     vals_p = [float(pred_vals[k]) for k in range(ue_num)]
@@ -287,12 +289,13 @@ def format_all_ue_metric(true_vals, pred_vals, ue_num: int, zh: bool = True,
         f'<td style="{_cell};background:{bg(vals_p[k])}">{fmt.format(vals_p[k])}</td>'
         for k in ks)
     if zh:
-        _worst_desc = {"rate": "最差", "interf": "干扰最大", "signal": "信号最弱"}[metric]
+        _worst_desc = {"rate": "最差", "interf": "干扰最大", "signal": "信号最弱",
+                       "sinr": "SINR最低"}[metric]
         worst_note = f"▼ = 当前{_worst_desc} UE（按真实值）"
         title = f"当前每个 UE 的{lbl_zh} ({unit})："
     else:
         _worst_desc = {"rate": "worst", "interf": "highest-interference",
-                       "signal": "weakest-signal"}[metric]
+                       "signal": "weakest-signal", "sinr": "lowest-SINR"}[metric]
         worst_note = f"▼ = current {_worst_desc} UE (by true value)"
         title = f"Current per-UE {lbl_en} ({unit}):"
     return (

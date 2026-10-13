@@ -2284,7 +2284,16 @@ else:
         "<h1 style='text-align:center;margin:0;font-size:1.8rem'>"
         "AI Agent for Resource Allocation in Wireless Networks</h1>"
     )
-_PAPER_URL = "app/static/paper.pdf"          # Streamlit static-serving route
+# Streamlit static-serving route. The ?v= tag (size+mtime of the file) changes
+# whenever paper.pdf is replaced, so Cloudflare/browser caches never serve a
+# stale copy; tornado's StaticFileHandler accepts the query string as-is.
+_PAPER_PATH = _pl.Path(__file__).parent / "static" / "paper.pdf"
+try:
+    _ps = _PAPER_PATH.stat()
+    _PAPER_VER = f"{_ps.st_size}-{int(_ps.st_mtime)}"
+except OSError:
+    _PAPER_VER = "0"
+_PAPER_URL = f"app/static/paper.pdf?v={_PAPER_VER}"
 _PAPER_FILENAME = "AI Agents for Resource Allocation in 6G Networks.pdf"
 st.markdown(
     "<style>"

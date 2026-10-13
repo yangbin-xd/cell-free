@@ -2284,22 +2284,44 @@ else:
         "<h1 style='text-align:center;margin:0;font-size:1.8rem'>"
         "AI Agent for Resource Allocation in Wireless Networks</h1>"
     )
+_PAPER_URL = "app/static/paper.pdf"          # Streamlit static-serving route
+_PAPER_FILENAME = "Learning_Radio_Maps_via_Graph_Transformer.pdf"
 st.markdown(
     "<style>"
     "div[data-testid='stElementContainer']:has(iframe[height='0']){"
     "height:0!important;min-height:0!important;margin:0!important;"
     "padding:0!important;overflow:hidden;}"
     "@media (max-width:768px){#radiomap-email-link{display:none!important;}"
-    "#radiomap-title-svg{width:80%!important;}}"
+    "#radiomap-title-svg{width:80%!important;}"
+    "#radiomap-links{position:static!important;transform:none!important;"
+    "justify-content:center;margin-top:0.4rem;}}"
+    # shields.io-style badges (pure CSS: no external image requests)
+    ".rm-badge{display:inline-flex;align-items:stretch;height:20px;"
+    "font:600 11px/20px -apple-system,BlinkMacSystemFont,'Segoe UI',Verdana,"
+    "Helvetica,Arial,sans-serif;border-radius:4px;overflow:hidden;"
+    "text-decoration:none!important;color:#fff!important;cursor:pointer;"
+    "user-select:none;white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.25);"
+    "transition:filter .15s,transform .15s;}"
+    ".rm-badge:hover{filter:brightness(1.12);transform:translateY(-1px);}"
+    ".rm-badge-l{background:#555;padding:0 7px;}"
+    ".rm-badge-r{padding:0 7px;}"
     "</style>"
     "<div style='position:relative;margin-bottom:0;padding-top:0.5rem'>"
     f"{_title_html}"
-    "<a id='radiomap-email-link' "
+    "<div id='radiomap-links' "
     "style='position:absolute;right:0;top:50%;transform:translateY(-50%);"
-    "font-size:0.9rem;text-decoration:none;color:#888;cursor:pointer;"
-    "user-select:none' "
-    "title='Click to copy'>"
-    "📧 binyang_2020@163.com</a>"
+    "display:flex;gap:8px;align-items:center'>"
+    # Paper badge: served by Streamlit static serving (static/paper.pdf,
+    # enableStaticServing=true in .streamlit/config.toml) at app/static/.
+    f"<a id='radiomap-paper-link' class='rm-badge' href='{_PAPER_URL}' "
+    f"download='{_PAPER_FILENAME}' title='Download the paper (PDF)'>"
+    "<span class='rm-badge-l'>📄 Paper</span>"
+    "<span class='rm-badge-r' style='background:#b31b1b'>PDF</span></a>"
+    "<a id='radiomap-email-link' class='rm-badge' title='Click to copy'>"
+    "<span class='rm-badge-l'>📧 Email</span>"
+    "<span id='radiomap-email-txt' class='rm-badge-r' "
+    "style='background:#007ec6'>binyang_2020@163.com</span></a>"
+    "</div>"
     "</div>",
     unsafe_allow_html=True,
 )
@@ -2315,17 +2337,18 @@ components.html(
           if (!link || link.dataset.bound === '1') return;
           link.dataset.bound = '1';
           link.removeAttribute('href');        // guarantee it never navigates
-          var orig = link.innerHTML;
+          var txt = doc.getElementById('radiomap-email-txt') || link;
+          var orig = txt.innerHTML, origBg = txt.style.background;
           link.addEventListener('click', function(ev) {
             ev.preventDefault();               // no redirect, ever
             ev.stopPropagation();
             var text = 'binyang_2020@163.com';
             var done = function() {
-              link.innerHTML = '✓ Copied';
-              link.style.color = '#4caf50';
+              txt.innerHTML = '✓ Copied';
+              txt.style.background = '#4caf50';
               setTimeout(function() {
-                link.innerHTML = orig;
-                link.style.color = '#888';
+                txt.innerHTML = orig;
+                txt.style.background = origBg;
               }, 1500);
             };
             var fallback = function() {

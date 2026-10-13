@@ -2285,7 +2285,7 @@ else:
         "AI Agent for Resource Allocation in Wireless Networks</h1>"
     )
 _PAPER_URL = "app/static/paper.pdf"          # Streamlit static-serving route
-_PAPER_FILENAME = "Learning_Radio_Maps_via_Graph_Transformer.pdf"
+_PAPER_FILENAME = "AI Agents for Resource Allocation in 6G Networks.pdf"
 st.markdown(
     "<style>"
     "div[data-testid='stElementContainer']:has(iframe[height='0']){"
